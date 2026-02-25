@@ -6,7 +6,7 @@ Centralized configuration for the FinMEM trading agent.
 
 import os
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import Optional, Dict, Any
 from dotenv import load_dotenv
 
 # Load environment variables
@@ -31,27 +31,61 @@ class EmbeddingConfig:
 
 
 @dataclass
+class MemoryLayerConfig:
+    """Configuration for a single memory layer."""
+    jump_threshold_upper: float = 999999.0  # No promotion by default
+    jump_threshold_lower: float = -999999.0  # No demotion by default
+    decay_params: Dict[str, float] = field(default_factory=lambda: {
+        "decay_rate": 0.5,
+        "importance_decay_rate": 0.0,
+    })
+    clean_up_threshold_dict: Dict[str, float] = field(default_factory=lambda: {
+        "recency_threshold": 0.01,
+        "importance_threshold": 0.01,
+    })
+    compound_score_params: Dict[str, float] = field(default_factory=lambda: {
+        "w_recency": 0.5,
+        "w_importance": 0.5,
+        "w_similarity": 0.5,
+        "w_compound": 0.5,
+    })
+
+
+@dataclass
 class MemoryConfig:
     """Layered memory configuration based on the paper."""
     
-    # Memory decay rates (per time unit)
-    shallow_decay: float = 0.9      # Fast decay for daily events
-    intermediate_decay: float = 0.7  # Medium decay for weekly trends
-    deep_decay: float = 0.3          # Slow decay for fundamentals
+    # Per-layer configs
+    short: MemoryLayerConfig = field(default_factory=lambda: MemoryLayerConfig(
+        jump_threshold_upper=0.8,
+        jump_threshold_lower=-999999.0,  # No demotion from short
+        decay_params={"decay_rate": 0.99, "importance_decay_rate": 0.0},
+        clean_up_threshold_dict={"recency_threshold": 0.01, "importance_threshold": 0.01},
+    ))
+    mid: MemoryLayerConfig = field(default_factory=lambda: MemoryLayerConfig(
+        jump_threshold_upper=0.85,
+        jump_threshold_lower=0.1,
+        decay_params={"decay_rate": 0.5, "importance_decay_rate": 0.0},
+        clean_up_threshold_dict={"recency_threshold": 0.01, "importance_threshold": 0.01},
+    ))
+    long: MemoryLayerConfig = field(default_factory=lambda: MemoryLayerConfig(
+        jump_threshold_upper=999999.0,  # No promotion from long
+        jump_threshold_lower=0.15,
+        decay_params={"decay_rate": 0.1, "importance_decay_rate": 0.0},
+        clean_up_threshold_dict={"recency_threshold": 0.005, "importance_threshold": 0.005},
+    ))
+    reflection: MemoryLayerConfig = field(default_factory=lambda: MemoryLayerConfig(
+        jump_threshold_upper=999999.0,
+        jump_threshold_lower=-999999.0,
+        decay_params={"decay_rate": 0.3, "importance_decay_rate": 0.0},
+        clean_up_threshold_dict={"recency_threshold": 0.005, "importance_threshold": 0.005},
+    ))
     
-    # Time horizons (in days)
-    shallow_horizon: int = 3         # 1-3 days
-    intermediate_horizon: int = 21   # ~3 weeks
-    deep_horizon: int = 90           # ~3 months
+    # Cognitive span: how many memories to retrieve per layer
+    top_k: int = 5
     
-    # Scoring weights (recency, relevancy, importance)
-    alpha: float = 0.3  # Recency weight
-    beta: float = 0.4   # Relevancy weight  
-    gamma: float = 0.3  # Importance weight
-    
-    # Vector store settings
-    collection_name: str = "finmem_memories"
-    persist_directory: str = "./data/chromadb"
+    # Vector store settings (used for checkpointing)
+    persist_directory: str = "./data/checkpoints"
 
 
 @dataclass
@@ -64,7 +98,13 @@ class ProfileConfig:
     # Trading styles
     trading_style: str = "balanced"  # value, growth, momentum, balanced
     
-    # Agent personality prompt
+    # Character string for memory queries
+    character_string: str = (
+        "A professional financial analyst specializing in stock trading. "
+        "Expert in analyzing market trends, financial statements, and news sentiment."
+    )
+    
+    # Agent personality prompt template
     personality: str = """You are a professional financial analyst with expertise in stock trading.
 You analyze market data, news, and trends to make informed trading decisions.
 You are {risk_level} in your approach and focus on {trading_style} investing."""
@@ -100,6 +140,44 @@ class FinMEMConfig:
     initial_capital: float = 100000.0
     max_position_size: float = 0.2  # Max 20% of portfolio per stock
     
+    # Agent settings
+    agent_name: str = "finmem_agent"
+    look_back_window_size: int = 7
+    
+    def get_brain_config(self) -> Dict[str, Any]:
+        """Generate config dict for BrainDB.from_config()."""
+        return {
+            "agent_name": self.agent_name,
+            "short": {
+                "jump_threshold_upper": self.memory.short.jump_threshold_upper,
+                "jump_threshold_lower": self.memory.short.jump_threshold_lower,
+                "decay_params": self.memory.short.decay_params,
+                "clean_up_threshold_dict": self.memory.short.clean_up_threshold_dict,
+                "compound_score_params": self.memory.short.compound_score_params,
+            },
+            "mid": {
+                "jump_threshold_upper": self.memory.mid.jump_threshold_upper,
+                "jump_threshold_lower": self.memory.mid.jump_threshold_lower,
+                "decay_params": self.memory.mid.decay_params,
+                "clean_up_threshold_dict": self.memory.mid.clean_up_threshold_dict,
+                "compound_score_params": self.memory.mid.compound_score_params,
+            },
+            "long": {
+                "jump_threshold_upper": self.memory.long.jump_threshold_upper,
+                "jump_threshold_lower": self.memory.long.jump_threshold_lower,
+                "decay_params": self.memory.long.decay_params,
+                "clean_up_threshold_dict": self.memory.long.clean_up_threshold_dict,
+                "compound_score_params": self.memory.long.compound_score_params,
+            },
+            "reflection": {
+                "jump_threshold_upper": self.memory.reflection.jump_threshold_upper,
+                "jump_threshold_lower": self.memory.reflection.jump_threshold_lower,
+                "decay_params": self.memory.reflection.decay_params,
+                "clean_up_threshold_dict": self.memory.reflection.clean_up_threshold_dict,
+                "compound_score_params": self.memory.reflection.compound_score_params,
+            },
+        }
+
 
 # Default configuration
 DEFAULT_CONFIG = FinMEMConfig()

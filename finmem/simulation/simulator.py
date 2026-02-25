@@ -1,444 +1,379 @@
 """
-FinMEM Trading Simulator
+Trading Simulator
 
-Simulates trading with the FinMEM agent over a time period.
-Supports train mode (populate memory) and test mode (make decisions).
+The main agent class that orchestrates the FinMEM trading loop.
+Processes one trading day at a time through the step() method:
+
+1. Receive market info from environment
+2. Store data in appropriate memory layers
+3. Run reflection (LLM-based analysis)
+4. Execute trade decision
+5. Update access counters from portfolio feedback
+6. Memory system step (decay, cleanup, jumps)
 """
 
-from datetime import datetime, timedelta
-from typing import Optional, List, Dict, Any
+import os
+import pickle
+import logging
+from datetime import date, datetime, timedelta
+from typing import Optional, Dict, Any, List, Union
 from dataclasses import dataclass, field
-import json
 
 from ..config import FinMEMConfig, DEFAULT_CONFIG
+from ..memory.layered_memory import BrainDB
 from ..llm_client import LLMClient
-from ..profiling.agent_profile import AgentProfile
-from ..memory.layered_memory import LayeredMemory, MemoryLayer
-from ..decision.decision_engine import DecisionEngine, TradeDecision, TradeAction
-from ..data.price_fetcher import PriceFetcher
-from ..data.news_fetcher import NewsFetcher
-from ..data.finnhub_news import FinnhubNewsFetcher
+from ..decision.reflection import trading_reflection
+from .environment import MarketEnvironment
+from .portfolio import Portfolio
+from ..data.build_dataset import build_dataset, load_dataset
 
-
-def _normalize_datetime(dt: datetime) -> datetime:
-    """Convert timezone-aware datetime to timezone-naive (strip tzinfo)."""
-    if dt.tzinfo is not None:
-        return dt.replace(tzinfo=None)
-    return dt
-
-
-@dataclass
-class Position:
-    """A stock position."""
-    ticker: str
-    shares: float
-    entry_price: float
-    entry_date: datetime
-    
-    @property
-    def value(self) -> float:
-        """Current position value at entry price."""
-        return self.shares * self.entry_price
-
-
-@dataclass 
-class Portfolio:
-    """Portfolio tracker."""
-    cash: float
-    positions: Dict[str, Position] = field(default_factory=dict)
-    history: List[Dict[str, Any]] = field(default_factory=list)
-    
-    @property
-    def total_value(self) -> float:
-        """Total portfolio value."""
-        position_value = sum(p.value for p in self.positions.values())
-        return self.cash + position_value
-    
-    def get_position_size(self, ticker: str) -> float:
-        """Get position size as percentage of portfolio."""
-        if ticker not in self.positions:
-            return 0.0
-        return self.positions[ticker].value / self.total_value
+logger = logging.getLogger(__name__)
 
 
 @dataclass
 class SimulationResult:
     """Results from a simulation run."""
-    start_date: datetime
-    end_date: datetime
+    ticker: str
+    mode: str
+    start_date: date
+    end_date: date
+    days_processed: int
     initial_capital: float
     final_value: float
-    decisions: List[TradeDecision]
+    total_return: float
+    total_return_pct: float
     trades: List[Dict[str, Any]]
-    
-    @property
-    def total_return(self) -> float:
-        """Total return percentage."""
-        return ((self.final_value - self.initial_capital) / self.initial_capital) * 100
-    
-    def to_dict(self) -> Dict[str, Any]:
-        """Convert to dictionary."""
-        return {
-            "start_date": self.start_date.isoformat(),
-            "end_date": self.end_date.isoformat(),
-            "initial_capital": self.initial_capital,
-            "final_value": self.final_value,
-            "total_return_percent": self.total_return,
-            "num_decisions": len(self.decisions),
-            "num_trades": len(self.trades)
-        }
+    reflection_results: Dict[date, Dict[str, Any]]
+    memory_stats: Dict[str, Any]
 
 
 class TradingSimulator:
-    """
-    FinMEM Trading Simulator.
+    """FinMEM Trading Agent.
     
-    Runs the trading agent over a time period in either:
-    - Train mode: Populates memory with market data
-    - Test mode: Uses memory to make trading decisions
+    Orchestrates the full trading pipeline:
+    - Memory system (BrainDB with 4 layers)
+    - Reflection (LLM-based working memory)
+    - Portfolio management
+    - Day-by-day market simulation
     """
-    
-    def __init__(self, config: Optional[FinMEMConfig] = None):
-        """Initialize the simulator.
+
+    def __init__(
+        self,
+        config: Optional[FinMEMConfig] = None,
+        brain: Optional[BrainDB] = None,
+    ):
+        """Initialize the trading simulator.
         
         Args:
-            config: FinMEM configuration.
+            config: Configuration (uses defaults if None).
+            brain: Pre-built BrainDB (creates from config if None).
         """
         self.config = config or DEFAULT_CONFIG
         
-        # Initialize components
-        self.memory = LayeredMemory(self.config.memory)
-        self.llm = LLMClient(self.config.llm)
-        self.profile = AgentProfile.from_config(self.config.profile)
-        self.decision_engine = DecisionEngine(self.memory, self.llm, self.profile)
+        # Initialize LLM client
+        self.llm = LLMClient(config=self.config.llm)
         
-        # Data fetchers
-        self.price_fetcher = PriceFetcher()
-        self.finnhub_fetcher = FinnhubNewsFetcher(max_articles=self.config.data.news_max_articles)
-        self.google_news_fetcher = NewsFetcher(self.config.data.news_max_articles)
+        # Initialize memory system
+        self.brain = brain or BrainDB.from_config(self.config.get_brain_config())
         
-        # Portfolio
-        self.portfolio = Portfolio(cash=self.config.initial_capital)
-        
-        # Results tracking
-        self.decisions: List[TradeDecision] = []
-        self.trades: List[Dict[str, Any]] = []
-    
-    def populate_memory(
+        # Simulation state
+        self.portfolio: Optional[Portfolio] = None
+        self.reflection_results: Dict[date, Dict[str, Any]] = {}
+        self.day_counter = 0
+
+    def step(
         self,
-        ticker: str,
-        start_date: datetime,
-        end_date: datetime,
-        verbose: bool = True
-    ):
-        """Populate memory with historical data (train mode).
-        
-        Args:
-            ticker: Stock ticker.
-            start_date: Start date for data.
-            end_date: End date for data.
-            verbose: Print progress.
-        """
-        if verbose:
-            print(f"Populating memory for {ticker} from {start_date.date()} to {end_date.date()}")
-        
-        # Get company fundamentals (deep memory)
-        fundamentals = self.price_fetcher.get_fundamentals_summary(ticker)
-        self.memory.add(
-            content=fundamentals,
-            source="fundamental",
-            ticker=ticker,
-            importance=0.8,
-            timestamp=start_date,
-            layer=MemoryLayer.DEEP
-        )
-        if verbose:
-            print(f"  Added fundamentals to deep memory")
-        
-        # Get historical prices
-        prices = self.price_fetcher.get_historical_prices(
-            ticker, start_date, end_date
-        )
-        
-        for price in prices:
-            # Determine layer based on how old the data is
-            # Normalize to avoid timezone comparison issues
-            price_date = _normalize_datetime(price.date)
-            age_days = (end_date - price_date).days
-            
-            if age_days <= 3:
-                layer = MemoryLayer.SHALLOW
-                importance = 0.7
-            elif age_days <= 21:
-                layer = MemoryLayer.INTERMEDIATE
-                importance = 0.5
-            else:
-                layer = MemoryLayer.DEEP
-                importance = 0.3
-            
-            self.memory.add(
-                content=price.to_summary(),
-                source="price",
-                ticker=ticker,
-                importance=importance,
-                timestamp=price.date,
-                layer=layer
-            )
-        
-        if verbose:
-            print(f"  Added {len(prices)} price records")
-        
-        # Get news (Finnhub primary, Google News RSS fallback)
-        days_back = (end_date - start_date).days
-        
-        # Try Finnhub first
-        news_items = self.finnhub_fetcher.fetch_and_format_for_memory(ticker, days_back)
-        news_source = "Finnhub"
-        
-        # Fallback to Google News RSS if Finnhub returns nothing
-        if not news_items:
-            news_items = self.google_news_fetcher.fetch_and_format_for_memory(
-                ticker, days_back=days_back
-            )
-            news_source = "Google News"
-        
-        for news in news_items:
-            self.memory.add(
-                content=news,
-                source="news",
-                ticker=ticker,
-                importance=0.6,
-                layer=MemoryLayer.SHALLOW
-            )
-        
-        if verbose:
-            print(f"  Added {len(news_items)} news articles (via {news_source})")
-            stats = self.memory.stats()
-            print(f"  Memory stats: {stats['by_layer']}")
-    
-    def make_decision(
-        self,
-        ticker: str,
-        current_price: Optional[float] = None
-    ) -> TradeDecision:
-        """Make a trading decision for a ticker.
-        
-        Args:
-            ticker: Stock ticker.
-            current_price: Current price (fetched if not provided).
-            
-        Returns:
-            TradeDecision object.
-        """
-        # Get current price if not provided
-        if current_price is None:
-            price_data = self.price_fetcher.get_current_price(ticker)
-            current_price = price_data.close if price_data else None
-        
-        # Build portfolio context
-        position_size = self.portfolio.get_position_size(ticker)
-        portfolio_context = (
-            f"Cash: ${self.portfolio.cash:,.2f}, "
-            f"Current {ticker} position: {position_size:.1%} of portfolio"
-        )
-        
-        # Make decision
-        decision = self.decision_engine.decide(
-            ticker=ticker,
-            current_price=current_price,
-            portfolio_context=portfolio_context
-        )
-        
-        self.decisions.append(decision)
-        return decision
-    
-    def execute_decision(
-        self,
-        decision: TradeDecision,
-        price: float
+        cur_date: date,
+        cur_price: float,
+        filing_k: Optional[str],
+        filing_q: Optional[str],
+        news: List[str],
+        run_mode: str,
+        future_record: Optional[float] = None,
     ) -> Optional[Dict[str, Any]]:
-        """Execute a trading decision.
+        """Process one trading day.
+        
+        This is the core loop from the FinMEM paper, matching the
+        reference implementation's agent.step() method.
         
         Args:
-            decision: The trading decision.
-            price: Execution price.
+            cur_date: Current trading date.
+            cur_price: Current stock price.
+            filing_k: Annual filing text (if any).
+            filing_q: Quarterly filing text (if any).
+            news: List of news headlines/summaries.
+            run_mode: "train" or "test".
+            future_record: Next-day price change (train mode only).
             
         Returns:
-            Trade record or None if no trade executed.
+            Reflection result dictionary (contains decision in test mode).
         """
-        ticker = decision.ticker
+        symbol = self.portfolio.symbol if self.portfolio else "UNKNOWN"
         
-        if decision.action == TradeAction.BUY:
-            # Calculate position size
-            max_investment = self.portfolio.cash * min(
-                decision.suggested_size,
-                self.config.max_position_size
+        # 1. Store filings in memory
+        if filing_q:
+            self.brain.add_memory_mid(
+                symbol=symbol, mem_date=cur_date, text=filing_q
             )
-            
-            if max_investment < 100:  # Minimum trade size
-                return None
-            
-            shares = max_investment / price
-            
-            # Update portfolio
-            self.portfolio.cash -= max_investment
-            
-            if ticker in self.portfolio.positions:
-                # Average into existing position
-                existing = self.portfolio.positions[ticker]
-                total_shares = existing.shares + shares
-                avg_price = (
-                    (existing.shares * existing.entry_price + shares * price)
-                    / total_shares
-                )
-                self.portfolio.positions[ticker] = Position(
-                    ticker=ticker,
-                    shares=total_shares,
-                    entry_price=avg_price,
-                    entry_date=existing.entry_date
-                )
-            else:
-                self.portfolio.positions[ticker] = Position(
-                    ticker=ticker,
-                    shares=shares,
-                    entry_price=price,
-                    entry_date=decision.timestamp
-                )
-            
-            trade = {
-                "action": "BUY",
-                "ticker": ticker,
-                "shares": shares,
-                "price": price,
-                "value": max_investment,
-                "timestamp": decision.timestamp.isoformat()
-            }
-            self.trades.append(trade)
-            return trade
-            
-        elif decision.action == TradeAction.SELL:
-            if ticker not in self.portfolio.positions:
-                return None
-            
-            position = self.portfolio.positions[ticker]
-            shares = position.shares
-            value = shares * price
-            
-            # Update portfolio
-            self.portfolio.cash += value
-            del self.portfolio.positions[ticker]
-            
-            # Calculate P&L
-            pnl = value - (shares * position.entry_price)
-            
-            trade = {
-                "action": "SELL",
-                "ticker": ticker,
-                "shares": shares,
-                "price": price,
-                "value": value,
-                "pnl": pnl,
-                "timestamp": decision.timestamp.isoformat()
-            }
-            self.trades.append(trade)
-            return trade
+        if filing_k:
+            self.brain.add_memory_long(
+                symbol=symbol, mem_date=cur_date, text=filing_k
+            )
         
-        return None  # HOLD
-    
+        # 2. Store news in short-term memory
+        if news:
+            for article in news:
+                if article.strip():
+                    self.brain.add_memory_short(
+                        symbol=symbol, mem_date=cur_date, text=article
+                    )
+        
+        # 3. Update portfolio with current price
+        self.portfolio.update_market_info(
+            new_market_price_info=cur_price,
+            cur_date=cur_date,
+        )
+        
+        # 4. Run reflection (the core working memory operation)
+        momentum = None
+        if run_mode == "test":
+            moment_data = self.portfolio.get_moment(moment_window=3)
+            momentum = moment_data["moment"] if moment_data else None
+        
+        reflection_result = trading_reflection(
+            cur_date=cur_date,
+            symbol=symbol,
+            brain=self.brain,
+            llm=self.llm,
+            character_string=self.config.profile.character_string,
+            top_k=self.config.memory.top_k,
+            run_mode=run_mode,
+            future_record=future_record,
+            momentum=momentum,
+        )
+        
+        self.reflection_results[cur_date] = reflection_result
+        
+        # 5. Construct and execute action
+        if run_mode == "train":
+            # In train mode, action is derived from actual future record
+            direction = 1 if (future_record and future_record > 0) else -1
+            action = {"direction": direction}
+        else:
+            # In test mode, action comes from reflection
+            decision = reflection_result.get("investment_decision", "hold")
+            if decision == "buy":
+                action = {"direction": 1}
+            elif decision == "sell":
+                action = {"direction": -1}
+            else:
+                action = {"direction": 0}
+        
+        # 6. Execute the action
+        self.portfolio.record_action(action)
+        self.portfolio.update_portfolio_series()
+        
+        # 7. Update access counters based on portfolio feedback
+        self._update_access_counters()
+        
+        # 8. Memory system step (decay, cleanup, jumps)
+        self.brain.step()
+        
+        self.day_counter += 1
+        
+        logger.info(
+            f"[Day {self.day_counter}] {cur_date} | "
+            f"Price: ${cur_price:.2f} | "
+            f"Action: {action.get('direction', 0)} | "
+            f"Portfolio: {self.portfolio.get_summary()}"
+        )
+        
+        return reflection_result
+
+    def _update_access_counters(self) -> None:
+        """Update memory access counters based on portfolio feedback."""
+        feedback = self.portfolio.get_feedback_response()
+        if not feedback or feedback["feedback"] == 0:
+            return
+        
+        feedback_date = feedback["date"]
+        if feedback_date not in self.reflection_results:
+            return
+        
+        reflection = self.reflection_results[feedback_date]
+        all_ids = reflection.get("_all_memory_ids", {})
+        
+        # Gather all memory IDs that influenced the decision
+        all_mem_ids = []
+        for layer in ["short", "mid", "long", "reflection"]:
+            all_mem_ids.extend(all_ids.get(layer, []))
+        
+        if all_mem_ids:
+            self.brain.update_access_count_with_feedback(
+                symbol=self.portfolio.symbol,
+                ids=all_mem_ids,
+                feedback=feedback["feedback"],
+            )
+
     def run(
         self,
         ticker: str,
-        start_date: datetime,
-        end_date: datetime,
+        start_date: date,
+        end_date: date,
         mode: str = "train",
-        verbose: bool = True
+        initial_capital: float = 100000.0,
+        dataset_path: Optional[str] = None,
+        verbose: bool = True,
     ) -> SimulationResult:
-        """Run the simulation.
+        """Run a full simulation.
         
         Args:
             ticker: Stock ticker to trade.
-            start_date: Start date.
-            end_date: End date.
-            mode: 'train' or 'test'.
+            start_date: Simulation start date.
+            end_date: Simulation end date.
+            mode: "train" or "test".
+            initial_capital: Starting cash.
+            dataset_path: Path to pre-built dataset. Builds one if not provided.
             verbose: Print progress.
             
         Returns:
-            SimulationResult object.
+            SimulationResult with trades, P&L, and memory stats.
         """
         if verbose:
             print(f"\n{'='*60}")
-            print(f"FinMEM Trading Simulation")
-            print(f"Ticker: {ticker}")
-            print(f"Period: {start_date.date()} to {end_date.date()}")
-            print(f"Mode: {mode.upper()}")
-            print(f"Initial Capital: ${self.config.initial_capital:,.2f}")
+            print(f"  FinMEM Trading Simulation")
+            print(f"  Ticker: {ticker} | Mode: {mode}")
+            print(f"  Period: {start_date} → {end_date}")
+            print(f"  Capital: ${initial_capital:,.2f}")
             print(f"{'='*60}\n")
         
-        # Populate memory
-        self.populate_memory(ticker, start_date, end_date, verbose)
-        
-        if mode == "train":
+        # Load or build dataset
+        if dataset_path and os.path.exists(dataset_path):
+            dataset = load_dataset(dataset_path)
             if verbose:
-                print("\nTraining complete. Memory populated.")
-            
-            return SimulationResult(
+                print(f"  Loaded dataset: {len(dataset)} days")
+        else:
+            if verbose:
+                print(f"  Building dataset from Yahoo Finance...")
+            dataset = build_dataset(
+                ticker=ticker,
                 start_date=start_date,
                 end_date=end_date,
-                initial_capital=self.config.initial_capital,
-                final_value=self.portfolio.total_value,
-                decisions=self.decisions,
-                trades=self.trades
             )
+            if verbose:
+                print(f"  Built dataset: {len(dataset)} days")
         
-        # Test mode: make decisions
-        if verbose:
-            print("\nMaking trading decision...")
+        if not dataset:
+            raise ValueError(f"No data available for {ticker} in the given date range")
         
-        price_data = self.price_fetcher.get_current_price(ticker)
-        current_price = price_data.close if price_data else None
-        
-        decision = self.make_decision(ticker, current_price)
-        
-        if verbose:
-            print(f"\nDecision: {decision}")
-        
-        # Execute if not HOLD
-        if decision.action != TradeAction.HOLD and current_price:
-            trade = self.execute_decision(decision, current_price)
-            if trade and verbose:
-                print(f"Executed: {trade['action']} {trade['shares']:.2f} shares @ ${trade['price']:.2f}")
-        
-        return SimulationResult(
+        # Initialize environment
+        env = MarketEnvironment(
+            env_data=dataset,
             start_date=start_date,
             end_date=end_date,
-            initial_capital=self.config.initial_capital,
-            final_value=self.portfolio.total_value,
-            decisions=self.decisions,
-            trades=self.trades
+            symbol=ticker,
         )
-    
-    def save_state(self, filepath: str):
-        """Save simulator state to file.
         
-        Args:
-            filepath: Path to save state.
-        """
+        # Initialize portfolio
+        self.portfolio = Portfolio(
+            symbol=ticker,
+            lookback_window_size=self.config.look_back_window_size,
+            cash=initial_capital,
+        )
+        
+        # Reset state
+        self.reflection_results = {}
+        self.day_counter = 0
+        
+        if verbose:
+            print(f"\n  Starting {mode} simulation ({env.simulation_length} days)...\n")
+        
+        # Main simulation loop
+        while True:
+            result = env.step()
+            cur_date, cur_price, filing_k, filing_q, news, future_record, terminated = result
+            
+            if terminated:
+                break
+            
+            if verbose and self.day_counter % 5 == 0:
+                print(f"  Day {self.day_counter + 1}: {cur_date} | "
+                      f"${cur_price:.2f} | "
+                      f"{self.portfolio.get_summary()}")
+            
+            self.step(
+                cur_date=cur_date,
+                cur_price=cur_price,
+                filing_k=filing_k,
+                filing_q=filing_q,
+                news=news,
+                run_mode=mode,
+                future_record=future_record if mode == "train" else None,
+            )
+        
+        # Calculate results
+        final_value = self.portfolio.total_value
+        total_return = final_value - initial_capital
+        total_return_pct = (total_return / initial_capital) * 100
+        
+        result = SimulationResult(
+            ticker=ticker,
+            mode=mode,
+            start_date=start_date,
+            end_date=end_date,
+            days_processed=self.day_counter,
+            initial_capital=initial_capital,
+            final_value=final_value,
+            total_return=total_return,
+            total_return_pct=total_return_pct,
+            trades=self.portfolio.action_history,
+            reflection_results=self.reflection_results,
+            memory_stats=self.brain.stats(ticker),
+        )
+        
+        if verbose:
+            print(f"\n{'='*60}")
+            print(f"  Simulation Complete")
+            print(f"  Days Processed: {self.day_counter}")
+            print(f"  Final Value:    ${final_value:,.2f}")
+            print(f"  Total Return:   ${total_return:,.2f} ({total_return_pct:+.2f}%)")
+            print(f"  Memory Stats:   {self.brain.stats(ticker)}")
+            print(f"{'='*60}\n")
+        
+        return result
+
+    # ── Checkpointing ──
+
+    def save_checkpoint(self, path: str) -> None:
+        """Save full agent state for resume."""
+        os.makedirs(path, exist_ok=True)
+        
+        # Save brain
+        self.brain.save_checkpoint(os.path.join(path, "brain"))
+        
+        # Save agent state
         state = {
-            "portfolio": {
-                "cash": self.portfolio.cash,
-                "positions": {
-                    k: {
-                        "ticker": v.ticker,
-                        "shares": v.shares,
-                        "entry_price": v.entry_price,
-                        "entry_date": v.entry_date.isoformat()
-                    }
-                    for k, v in self.portfolio.positions.items()
-                }
-            },
-            "decisions": [d.to_dict() for d in self.decisions],
-            "trades": self.trades
+            "config": self.config,
+            "portfolio": self.portfolio,
+            "reflection_results": self.reflection_results,
+            "day_counter": self.day_counter,
         }
+        with open(os.path.join(path, "agent_state.pkl"), "wb") as f:
+            pickle.dump(state, f)
         
-        with open(filepath, 'w') as f:
-            json.dump(state, f, indent=2)
+        logger.info(f"Checkpoint saved to {path}")
+
+    @classmethod
+    def load_checkpoint(cls, path: str) -> "TradingSimulator":
+        """Load agent state from checkpoint."""
+        with open(os.path.join(path, "agent_state.pkl"), "rb") as f:
+            state = pickle.load(f)
+        
+        brain = BrainDB.load_checkpoint(os.path.join(path, "brain"))
+        
+        agent = cls(config=state["config"], brain=brain)
+        agent.portfolio = state["portfolio"]
+        agent.reflection_results = state["reflection_results"]
+        agent.day_counter = state["day_counter"]
+        
+        return agent

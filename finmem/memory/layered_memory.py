@@ -1,428 +1,812 @@
 """
 Layered Memory System
 
-The core innovation of FinMEM - a 3-layer memory system that processes
-financial data with different decay rates and time horizons.
+The core innovation of FinMEM — a 4-layer memory system (short/mid/long/reflection)
+backed by FAISS for vector search, with:
+- Per-layer exponential decay
+- Memory promotion/demotion (jump mechanism)
+- Access counter feedback from trading outcomes
+- Compound scoring: recency * importance * similarity
 
-Based on the paper's Memory module design:
-- Shallow Layer: Daily events (fast decay)
-- Intermediate Layer: Weekly trends (medium decay)  
-- Deep Layer: Fundamental knowledge (slow decay)
+Based on the FinMEM paper and reference implementation.
 """
 
-import json
-import time
-from datetime import datetime, timedelta
-from dataclasses import dataclass, field
-from typing import List, Optional, Dict, Any
-from enum import Enum
+import os
+import pickle
+import logging
 import math
+import numpy as np
+from datetime import date, datetime
+from typing import List, Optional, Dict, Any, Tuple, Union, Callable
+from dataclasses import dataclass, field
+from enum import Enum
 
-from ..config import MemoryConfig, DEFAULT_CONFIG
 from .embeddings import get_embedding_model, EmbeddingModel
+from .memory_functions import (
+    ExponentialDecay,
+    LinearCompoundScore,
+    ImportanceScoreInitialization,
+    RecencyScoreInitialization,
+    LinearImportanceScoreChange,
+    get_importance_score_initialization,
+)
 
-
-def _normalize_datetime(dt: datetime) -> datetime:
-    """Convert timezone-aware datetime to timezone-naive (strip tzinfo)."""
-    if dt.tzinfo is not None:
-        return dt.replace(tzinfo=None)
-    return dt
+logger = logging.getLogger(__name__)
 
 
 class MemoryLayer(Enum):
-    """Memory layer types with their characteristics."""
-    SHALLOW = "shallow"         # Daily events, news
-    INTERMEDIATE = "intermediate"  # Weekly trends, patterns
-    DEEP = "deep"               # Fundamental knowledge
+    """Memory layer types."""
+    SHORT = "short"
+    MID = "mid"
+    LONG = "long"
+    REFLECTION = "reflection"
 
 
-@dataclass
-class MemoryItem:
-    """A single memory item stored in the system."""
-    
-    id: str
-    content: str
-    layer: MemoryLayer
-    timestamp: datetime
-    
-    # Metadata
-    source: str = "unknown"      # news, price, fundamental, etc.
-    ticker: Optional[str] = None
-    
-    # Scoring components (set during retrieval)
-    importance: float = 0.5      # Base importance (0-1)
-    
-    # Computed embedding (set after creation)
-    embedding: Optional[List[float]] = None
-    
-    def to_dict(self) -> Dict[str, Any]:
-        """Convert to dictionary for storage."""
-        return {
-            "id": self.id,
-            "content": self.content,
-            "layer": self.layer.value,
-            "timestamp": self.timestamp.isoformat(),
-            "source": self.source,
-            "ticker": self.ticker,
-            "importance": self.importance
-        }
-    
-    @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "MemoryItem":
-        """Create from dictionary."""
-        return cls(
-            id=data["id"],
-            content=data["content"],
-            layer=MemoryLayer(data["layer"]),
-            timestamp=datetime.fromisoformat(data["timestamp"]),
-            source=data.get("source", "unknown"),
-            ticker=data.get("ticker"),
-            importance=data.get("importance", 0.5)
-        )
+# ─── Low-level MemoryDB (one per layer) ────────────────────────────────────
+
+class _IdGenerator:
+    """Thread-safe incrementing ID generator."""
+    def __init__(self):
+        self.current_id = 0
+
+    def __call__(self) -> int:
+        self.current_id += 1
+        return self.current_id - 1
 
 
-class LayeredMemory:
+class MemoryDB:
+    """Single-layer memory database backed by numpy for vector search.
+    
+    Each layer has its own MemoryDB with configurable:
+    - Jump thresholds for promotion/demotion
+    - Decay parameters
+    - Cleanup thresholds
+    - Importance initialization
     """
-    Three-layer memory system based on the FinMEM paper.
-    
-    Implements:
-    - Shallow memory: Short-term events with fast decay
-    - Intermediate memory: Medium-term trends
-    - Deep memory: Long-term fundamental knowledge
-    
-    Memory scoring: Score = α * Recency + β * Relevancy + γ * Importance
-    """
-    
-    def __init__(self, config: Optional[MemoryConfig] = None):
-        """Initialize the layered memory system.
-        
-        Args:
-            config: Memory configuration. Uses default if not provided.
-        """
-        self.config = config or DEFAULT_CONFIG.memory
-        
-        # Initialize embedding model (lazy loaded)
-        self._embedding_model: Optional[EmbeddingModel] = None
-        
-        # In-memory storage (can be replaced with ChromaDB for persistence)
-        self._memories: Dict[str, MemoryItem] = {}
-        self._embeddings: Dict[str, List[float]] = {}
-        
-        # Memory counter for ID generation
-        self._counter = 0
-    
-    @property
-    def embedding_model(self) -> EmbeddingModel:
-        """Get the embedding model (lazy loaded)."""
-        if self._embedding_model is None:
-            self._embedding_model = get_embedding_model()
-        return self._embedding_model
-    
-    def _generate_id(self) -> str:
-        """Generate a unique memory ID."""
-        self._counter += 1
-        return f"mem_{int(time.time())}_{self._counter}"
-    
-    def _determine_layer(self, source: str, age_days: float) -> MemoryLayer:
-        """Determine which layer a memory belongs to.
-        
-        Args:
-            source: Source type of the information.
-            age_days: Age of the information in days.
-            
-        Returns:
-            Appropriate memory layer.
-        """
-        # News and recent price data go to shallow layer
-        if source in ["news", "price"] and age_days <= self.config.shallow_horizon:
-            return MemoryLayer.SHALLOW
-        
-        # Weekly trends go to intermediate
-        if age_days <= self.config.intermediate_horizon:
-            return MemoryLayer.INTERMEDIATE
-        
-        # Everything else (fundamentals, old info) goes to deep
-        return MemoryLayer.DEEP
-    
-    def add(
+
+    def __init__(
         self,
-        content: str,
-        source: str = "unknown",
-        ticker: Optional[str] = None,
-        importance: float = 0.5,
-        timestamp: Optional[datetime] = None,
-        layer: Optional[MemoryLayer] = None
-    ) -> str:
-        """Add a memory item to the system.
-        
-        Args:
-            content: The text content to store.
-            source: Source type (news, price, fundamental, etc.).
-            ticker: Stock ticker if applicable.
-            importance: Base importance score (0-1).
-            timestamp: When the information occurred. Defaults to now.
-            layer: Specific layer to store in. Auto-determined if not provided.
-            
-        Returns:
-            The ID of the stored memory.
-        """
-        timestamp = timestamp or datetime.now()
-        
-        # Determine layer based on source and age
-        if layer is None:
-            ts = _normalize_datetime(timestamp)
-            age_days = (datetime.now() - ts).days
-            layer = self._determine_layer(source, age_days)
-        
-        # Create memory item
-        memory_id = self._generate_id()
-        memory = MemoryItem(
-            id=memory_id,
-            content=content,
-            layer=layer,
-            timestamp=timestamp,
-            source=source,
-            ticker=ticker,
-            importance=importance
-        )
-        
-        # Generate and store embedding
-        embedding = self.embedding_model.embed(content)
-        memory.embedding = embedding
-        
-        # Store
-        self._memories[memory_id] = memory
-        self._embeddings[memory_id] = embedding
-        
-        return memory_id
-    
-    def _calculate_recency_score(self, memory: MemoryItem) -> float:
-        """Calculate recency score with layer-specific decay.
-        
-        Args:
-            memory: The memory item to score.
-            
-        Returns:
-            Recency score (0-1).
-        """
-        ts = _normalize_datetime(memory.timestamp)
-        age = datetime.now() - ts
-        age_days = age.total_seconds() / 86400
-        
-        # Get decay rate for this layer
-        decay_rates = {
-            MemoryLayer.SHALLOW: self.config.shallow_decay,
-            MemoryLayer.INTERMEDIATE: self.config.intermediate_decay,
-            MemoryLayer.DEEP: self.config.deep_decay
-        }
-        decay = decay_rates[memory.layer]
-        
-        # Exponential decay: score = e^(-decay * age)
-        score = math.exp(-decay * age_days)
-        return max(0.0, min(1.0, score))
-    
-    def _calculate_relevancy_score(
-        self,
-        memory: MemoryItem,
-        query_embedding: List[float]
-    ) -> float:
-        """Calculate relevancy score using cosine similarity.
-        
-        Args:
-            memory: The memory item to score.
-            query_embedding: Embedding of the query.
-            
-        Returns:
-            Relevancy score (0-1).
-        """
-        import numpy as np
-        
-        if memory.embedding is None:
-            return 0.0
-        
-        mem_emb = np.array(memory.embedding)
-        query_emb = np.array(query_embedding)
-        
-        dot_product = np.dot(mem_emb, query_emb)
-        norm1 = np.linalg.norm(mem_emb)
-        norm2 = np.linalg.norm(query_emb)
-        
-        if norm1 == 0 or norm2 == 0:
-            return 0.0
-        
-        # Cosine similarity, normalized to 0-1
-        similarity = (dot_product / (norm1 * norm2) + 1) / 2
-        return float(similarity)
-    
-    def _calculate_total_score(
-        self,
-        memory: MemoryItem,
-        query_embedding: List[float]
-    ) -> float:
-        """Calculate total memory score.
-        
-        Score = α * Recency + β * Relevancy + γ * Importance
-        
-        Args:
-            memory: The memory item to score.
-            query_embedding: Embedding of the query.
-            
-        Returns:
-            Total score (0-1).
-        """
-        recency = self._calculate_recency_score(memory)
-        relevancy = self._calculate_relevancy_score(memory, query_embedding)
-        importance = memory.importance
-        
-        score = (
-            self.config.alpha * recency +
-            self.config.beta * relevancy +
-            self.config.gamma * importance
-        )
-        
-        return min(1.0, score)
-    
-    def retrieve(
-        self,
-        query: str,
-        ticker: Optional[str] = None,
-        layer: Optional[MemoryLayer] = None,
-        top_k: int = 10
-    ) -> List[tuple[MemoryItem, float]]:
-        """Retrieve relevant memories for a query.
-        
-        Args:
-            query: The query text.
-            ticker: Filter by specific ticker.
-            layer: Filter by specific layer.
-            top_k: Maximum number of memories to return.
-            
-        Returns:
-            List of (memory, score) tuples, sorted by score descending.
-        """
-        # Generate query embedding
-        query_embedding = self.embedding_model.embed(query)
-        
-        # Score all memories
-        scored_memories = []
-        for memory in self._memories.values():
-            # Apply filters
-            if ticker and memory.ticker and memory.ticker != ticker:
-                continue
-            if layer and memory.layer != layer:
-                continue
-            
-            score = self._calculate_total_score(memory, query_embedding)
-            scored_memories.append((memory, score))
-        
-        # Sort by score and return top-k
-        scored_memories.sort(key=lambda x: x[1], reverse=True)
-        return scored_memories[:top_k]
-    
-    def retrieve_by_layer(
-        self,
-        layer: MemoryLayer,
-        ticker: Optional[str] = None,
-        top_k: int = 10
-    ) -> List[MemoryItem]:
-        """Retrieve memories from a specific layer.
-        
-        Args:
-            layer: The memory layer to retrieve from.
-            ticker: Filter by specific ticker.
-            top_k: Maximum number of memories to return.
-            
-        Returns:
-            List of memory items, sorted by recency.
-        """
-        memories = []
-        for memory in self._memories.values():
-            if memory.layer != layer:
-                continue
-            if ticker and memory.ticker and memory.ticker != ticker:
-                continue
-            memories.append(memory)
-        
-        # Sort by timestamp (most recent first)
-        memories.sort(key=lambda m: m.timestamp, reverse=True)
-        return memories[:top_k]
-    
-    def get_context_summary(
-        self,
-        ticker: str,
-        query: Optional[str] = None,
-        max_items_per_layer: int = 5
-    ) -> Dict[str, List[str]]:
-        """Get a summary of relevant context from all layers.
-        
-        Args:
-            ticker: The stock ticker to get context for.
-            query: Optional query for relevancy filtering.
-            max_items_per_layer: Max items to include per layer.
-            
-        Returns:
-            Dictionary with layer names as keys and content lists as values.
-        """
-        summary = {}
-        
-        for layer in MemoryLayer:
-            if query:
-                # Use relevancy-based retrieval
-                results = self.retrieve(
-                    query=query,
-                    ticker=ticker,
-                    layer=layer,
-                    top_k=max_items_per_layer
-                )
-                contents = [m.content for m, _ in results]
-            else:
-                # Use recency-based retrieval
-                memories = self.retrieve_by_layer(
-                    layer=layer,
-                    ticker=ticker,
-                    top_k=max_items_per_layer
-                )
-                contents = [m.content for m in memories]
-            
-            summary[layer.value] = contents
-        
-        return summary
-    
-    def clear(self, older_than: Optional[datetime] = None):
-        """Clear memories, optionally only those older than a date.
-        
-        Args:
-            older_than: If provided, only clear memories older than this date.
-        """
-        if older_than is None:
-            self._memories.clear()
-            self._embeddings.clear()
-        else:
-            to_remove = [
-                mid for mid, mem in self._memories.items()
-                if mem.timestamp < older_than
-            ]
-            for mid in to_remove:
-                del self._memories[mid]
-                if mid in self._embeddings:
-                    del self._embeddings[mid]
-    
-    def stats(self) -> Dict[str, Any]:
-        """Get memory statistics.
-        
-        Returns:
-            Dictionary with memory statistics.
-        """
-        layer_counts = {layer.value: 0 for layer in MemoryLayer}
-        for memory in self._memories.values():
-            layer_counts[memory.layer.value] += 1
-        
-        return {
-            "total_memories": len(self._memories),
-            "by_layer": layer_counts,
-            "config": {
-                "shallow_decay": self.config.shallow_decay,
-                "intermediate_decay": self.config.intermediate_decay,
-                "deep_decay": self.config.deep_decay
+        db_name: str,
+        id_generator: _IdGenerator,
+        emb_dim: int,
+        jump_threshold_upper: float,
+        jump_threshold_lower: float,
+        importance_score_init: ImportanceScoreInitialization,
+        recency_score_init: RecencyScoreInitialization,
+        compound_score_calc: LinearCompoundScore,
+        importance_score_change: LinearImportanceScoreChange,
+        decay_function: ExponentialDecay,
+        clean_up_threshold_dict: Dict[str, float],
+    ):
+        self.db_name = db_name
+        self.id_generator = id_generator
+        self.jump_threshold_upper = jump_threshold_upper
+        self.jump_threshold_lower = jump_threshold_lower
+        self.emb_dim = emb_dim
+        self.importance_score_init = importance_score_init
+        self.recency_score_init = recency_score_init
+        self.compound_score_calc = compound_score_calc
+        self.importance_score_change = importance_score_change
+        self.decay_function = decay_function
+        self.clean_up_threshold_dict = dict(clean_up_threshold_dict)
+
+        # Per-symbol storage
+        # universe[symbol] = {
+        #   "score_memory": [ {text, id, important_score, recency_score, delta,
+        #                      compound_score, access_counter, date, embedding}, ... ]
+        #   "embeddings": np.ndarray  (N x emb_dim)
+        #   "ids": list[int]
+        # }
+        self.universe: Dict[str, Dict[str, Any]] = {}
+
+    def _ensure_symbol(self, symbol: str) -> None:
+        """Create storage for a symbol if it doesn't exist."""
+        if symbol not in self.universe:
+            self.universe[symbol] = {
+                "score_memory": [],
+                "embeddings": np.empty((0, self.emb_dim), dtype=np.float32),
+                "ids": [],
             }
+
+    def add_memory(
+        self,
+        symbol: str,
+        mem_date: Union[date, datetime],
+        text: Union[List[str], str],
+        embeddings: np.ndarray,
+    ) -> List[int]:
+        """Add one or more memories.
+        
+        Args:
+            symbol: Stock ticker.
+            mem_date: Date of the memory.
+            text: Text content(s).
+            embeddings: Pre-computed embeddings (N x emb_dim).
+            
+        Returns:
+            List of assigned memory IDs.
+        """
+        self._ensure_symbol(symbol)
+
+        if isinstance(text, str):
+            text = [text]
+            embeddings = embeddings.reshape(1, -1)
+
+        # Normalize embeddings for cosine similarity via dot product
+        norms = np.linalg.norm(embeddings, axis=1, keepdims=True)
+        norms = np.where(norms == 0, 1.0, norms)
+        embeddings = embeddings / norms
+
+        ids = []
+        for i, t in enumerate(text):
+            mem_id = self.id_generator()
+            importance = self.importance_score_init()
+            recency = self.recency_score_init()
+            compound = self.compound_score_calc.recency_and_importance_score(
+                recency, importance
+            )
+
+            record = {
+                "text": t,
+                "id": mem_id,
+                "important_score": importance,
+                "recency_score": recency,
+                "delta": 0,
+                "compound_score": compound,
+                "access_counter": 0,
+                "date": mem_date,
+            }
+            self.universe[symbol]["score_memory"].append(record)
+            
+            # Add embedding
+            emb = embeddings[i:i+1].astype(np.float32)
+            self.universe[symbol]["embeddings"] = np.vstack(
+                [self.universe[symbol]["embeddings"], emb]
+            )
+            self.universe[symbol]["ids"].append(mem_id)
+            ids.append(mem_id)
+
+        return ids
+
+    def query(
+        self,
+        query_embedding: np.ndarray,
+        top_k: int,
+        symbol: str,
+    ) -> Tuple[List[str], List[int]]:
+        """Query memories by combining similarity + compound score.
+        
+        Two-phase search (matching reference implementation):
+        1. Find top-k by cosine similarity, merge with compound scores
+        2. Find top-k by compound score, get their similarity
+        3. Rank all candidates by merged score, return unique top-k
+        
+        Args:
+            query_embedding: Query vector (1 x emb_dim).
+            top_k: Number of results.
+            symbol: Stock ticker.
+            
+        Returns:
+            Tuple of (text_list, id_list).
+        """
+        if (
+            symbol not in self.universe
+            or len(self.universe[symbol]["score_memory"]) == 0
+            or top_k == 0
+        ):
+            return [], []
+
+        records = self.universe[symbol]["score_memory"]
+        all_embeddings = self.universe[symbol]["embeddings"]
+        all_ids = self.universe[symbol]["ids"]
+        n = len(records)
+        top_k = min(top_k, n)
+
+        # Normalize query
+        query_emb = query_embedding.reshape(1, -1).astype(np.float32)
+        q_norm = np.linalg.norm(query_emb)
+        if q_norm > 0:
+            query_emb = query_emb / q_norm
+
+        # Phase 1: top-k by cosine similarity
+        similarities = (all_embeddings @ query_emb.T).flatten()
+        p1_indices = np.argsort(similarities)[::-1][:top_k]
+
+        # Phase 2: top-k by compound score
+        compound_scores = [r["compound_score"] for r in records]
+        p2_indices = np.argsort(compound_scores)[::-1][:top_k]
+
+        # Merge candidates
+        candidate_set = set(p1_indices.tolist()) | set(p2_indices.tolist())
+        
+        candidates = []
+        for idx in candidate_set:
+            sim = float(similarities[idx])
+            compound = records[idx]["compound_score"]
+            final = self.compound_score_calc.merge_score(sim, compound)
+            candidates.append((idx, final))
+
+        # Sort by final score, take top-k unique
+        candidates.sort(key=lambda x: x[1], reverse=True)
+        
+        ret_texts = []
+        ret_ids = []
+        seen = set()
+        for idx, _ in candidates:
+            mid = all_ids[idx]
+            if mid not in seen:
+                seen.add(mid)
+                ret_texts.append(records[idx]["text"])
+                ret_ids.append(mid)
+            if len(ret_ids) >= top_k:
+                break
+
+        return ret_texts, ret_ids
+
+    def update_access_count_with_feedback(
+        self,
+        symbol: str,
+        ids: List[int],
+        feedbacks: List[int],
+    ) -> List[int]:
+        """Update access counters and importance scores based on feedback.
+        
+        Args:
+            symbol: Stock ticker.
+            ids: Memory IDs to update.
+            feedbacks: Feedback values (+1 for profit, -1 for loss).
+            
+        Returns:
+            List of successfully updated IDs.
+        """
+        if symbol not in self.universe:
+            return []
+
+        records = self.universe[symbol]["score_memory"]
+        success_ids = []
+        
+        for mem_id, feedback in zip(ids, feedbacks):
+            for record in records:
+                if record["id"] == mem_id:
+                    record["access_counter"] += feedback
+                    record["important_score"] = self.importance_score_change(
+                        access_counter=record["access_counter"],
+                        importance_score=record["important_score"],
+                    )
+                    record["compound_score"] = (
+                        self.compound_score_calc.recency_and_importance_score(
+                            recency_score=record["recency_score"],
+                            importance_score=record["important_score"],
+                        )
+                    )
+                    success_ids.append(mem_id)
+                    break
+
+        return success_ids
+
+    def _decay(self) -> None:
+        """Apply exponential decay to all memories."""
+        for symbol in self.universe:
+            for record in self.universe[symbol]["score_memory"]:
+                (
+                    record["recency_score"],
+                    record["important_score"],
+                    record["delta"],
+                ) = self.decay_function(
+                    important_score=record["important_score"],
+                    delta=record["delta"],
+                )
+                record["compound_score"] = (
+                    self.compound_score_calc.recency_and_importance_score(
+                        recency_score=record["recency_score"],
+                        importance_score=record["important_score"],
+                    )
+                )
+
+    def _clean_up(self) -> List[int]:
+        """Remove memories below score thresholds.
+        
+        Returns:
+            List of removed memory IDs.
+        """
+        removed_ids = []
+        recency_thresh = self.clean_up_threshold_dict.get("recency_threshold", 0.01)
+        importance_thresh = self.clean_up_threshold_dict.get("importance_threshold", 0.01)
+
+        for symbol in self.universe:
+            records = self.universe[symbol]["score_memory"]
+            ids_list = self.universe[symbol]["ids"]
+            
+            # Find indices to remove
+            remove_indices = []
+            for i, record in enumerate(records):
+                if (record["recency_score"] < recency_thresh or 
+                    record["important_score"] < importance_thresh):
+                    remove_indices.append(i)
+                    removed_ids.append(record["id"])
+
+            if remove_indices:
+                # Remove from records, embeddings, and ids
+                keep_indices = [i for i in range(len(records)) if i not in remove_indices]
+                self.universe[symbol]["score_memory"] = [records[i] for i in keep_indices]
+                if len(keep_indices) > 0:
+                    self.universe[symbol]["embeddings"] = self.universe[symbol]["embeddings"][keep_indices]
+                else:
+                    self.universe[symbol]["embeddings"] = np.empty((0, self.emb_dim), dtype=np.float32)
+                self.universe[symbol]["ids"] = [ids_list[i] for i in keep_indices]
+
+        return removed_ids
+
+    def step(self) -> List[int]:
+        """One time step: decay then clean up.
+        
+        Returns:
+            List of removed memory IDs.
+        """
+        self._decay()
+        return self._clean_up()
+
+    def prepare_jump(self) -> Tuple[Dict, Dict, List[int]]:
+        """Prepare memories for promotion/demotion.
+        
+        Memories with importance >= jump_threshold_upper are promoted (jump up).
+        Memories with importance < jump_threshold_lower are demoted (jump down).
+        
+        Returns:
+            (jump_up_dict, jump_down_dict, removed_ids)
+            Each dict: {symbol: {"objects": [...], "embeddings": np.ndarray}}
+        """
+        jump_up = {}
+        jump_down = {}
+        removed_ids = []
+
+        for symbol in self.universe:
+            records = self.universe[symbol]["score_memory"]
+            ids_list = self.universe[symbol]["ids"]
+            embeddings = self.universe[symbol]["embeddings"]
+            
+            up_indices = []
+            down_indices = []
+
+            for i, record in enumerate(records):
+                if record["important_score"] >= self.jump_threshold_upper:
+                    up_indices.append(i)
+                elif record["important_score"] < self.jump_threshold_lower:
+                    down_indices.append(i)
+
+            all_remove = up_indices + down_indices
+            for idx in all_remove:
+                removed_ids.append(records[idx]["id"])
+
+            if up_indices:
+                jump_up[symbol] = {
+                    "objects": [records[i] for i in up_indices],
+                    "embeddings": embeddings[up_indices],
+                }
+
+            if down_indices:
+                jump_down[symbol] = {
+                    "objects": [records[i] for i in down_indices],
+                    "embeddings": embeddings[down_indices],
+                }
+
+            # Remove jumped memories from this layer
+            if all_remove:
+                keep = [i for i in range(len(records)) if i not in all_remove]
+                self.universe[symbol]["score_memory"] = [records[i] for i in keep]
+                if len(keep) > 0:
+                    self.universe[symbol]["embeddings"] = embeddings[keep]
+                else:
+                    self.universe[symbol]["embeddings"] = np.empty((0, self.emb_dim), dtype=np.float32)
+                self.universe[symbol]["ids"] = [ids_list[i] for i in keep]
+
+        return jump_up, jump_down, removed_ids
+
+    def accept_jump(self, jump_dict: Dict, direction: str) -> None:
+        """Accept memories jumping in from another layer.
+        
+        Args:
+            jump_dict: {symbol: {"objects": [...], "embeddings": np.ndarray}}
+            direction: "up" (promoted) or "down" (demoted).
+        """
+        for symbol, data in jump_dict.items():
+            self._ensure_symbol(symbol)
+
+            for i, obj in enumerate(data["objects"]):
+                if direction == "up":
+                    # Reset recency on promotion
+                    obj["recency_score"] = self.recency_score_init()
+                    obj["delta"] = 0
+                
+                obj["compound_score"] = (
+                    self.compound_score_calc.recency_and_importance_score(
+                        recency_score=obj["recency_score"],
+                        importance_score=obj["important_score"],
+                    )
+                )
+                self.universe[symbol]["score_memory"].append(obj)
+                self.universe[symbol]["ids"].append(obj["id"])
+
+            embs = data["embeddings"]
+            if embs.ndim == 1:
+                embs = embs.reshape(1, -1)
+            self.universe[symbol]["embeddings"] = np.vstack(
+                [self.universe[symbol]["embeddings"], embs.astype(np.float32)]
+            )
+
+    def get_memory_count(self, symbol: str) -> int:
+        """Get number of memories for a symbol."""
+        if symbol not in self.universe:
+            return 0
+        return len(self.universe[symbol]["score_memory"])
+
+    def save_checkpoint(self, name: str, path: str) -> None:
+        """Save this memory layer to disk."""
+        layer_path = os.path.join(path, name)
+        os.makedirs(layer_path, exist_ok=True)
+
+        state = {
+            "db_name": self.db_name,
+            "jump_threshold_upper": self.jump_threshold_upper,
+            "jump_threshold_lower": self.jump_threshold_lower,
+            "emb_dim": self.emb_dim,
+            "importance_score_init": self.importance_score_init,
+            "recency_score_init": self.recency_score_init,
+            "compound_score_calc": self.compound_score_calc,
+            "importance_score_change": self.importance_score_change,
+            "decay_function": self.decay_function,
+            "clean_up_threshold_dict": self.clean_up_threshold_dict,
         }
+        with open(os.path.join(layer_path, "state_dict.pkl"), "wb") as f:
+            pickle.dump(state, f)
+        
+        # Save universe (memories + embeddings)
+        save_data = {}
+        for symbol in self.universe:
+            save_data[symbol] = {
+                "score_memory": self.universe[symbol]["score_memory"],
+                "embeddings": self.universe[symbol]["embeddings"],
+                "ids": self.universe[symbol]["ids"],
+            }
+        with open(os.path.join(layer_path, "universe.pkl"), "wb") as f:
+            pickle.dump(save_data, f)
+
+    @classmethod
+    def load_checkpoint(cls, name: str, path: str, id_generator: _IdGenerator) -> "MemoryDB":
+        """Load a memory layer from disk."""
+        layer_path = os.path.join(path, name)
+        
+        with open(os.path.join(layer_path, "state_dict.pkl"), "rb") as f:
+            state = pickle.load(f)
+        with open(os.path.join(layer_path, "universe.pkl"), "rb") as f:
+            universe_data = pickle.load(f)
+
+        obj = cls(
+            db_name=state["db_name"],
+            id_generator=id_generator,
+            emb_dim=state["emb_dim"],
+            jump_threshold_upper=state["jump_threshold_upper"],
+            jump_threshold_lower=state["jump_threshold_lower"],
+            importance_score_init=state["importance_score_init"],
+            recency_score_init=state["recency_score_init"],
+            compound_score_calc=state["compound_score_calc"],
+            importance_score_change=state["importance_score_change"],
+            decay_function=state["decay_function"],
+            clean_up_threshold_dict=state["clean_up_threshold_dict"],
+        )
+        obj.universe = universe_data
+        return obj
+
+
+# ─── BrainDB: 4-layer orchestrator ────────────────────────────────────────
+
+class BrainDB:
+    """Four-layer memory system orchestrating short/mid/long/reflection MemoryDBs.
+    
+    Handles:
+    - Adding memories to the correct layer
+    - Querying across layers
+    - Memory jumps (promotion/demotion) between layers
+    - Decay and cleanup across all layers
+    """
+
+    def __init__(
+        self,
+        agent_name: str,
+        emb_model: EmbeddingModel,
+        id_generator: _IdGenerator,
+        short_term_memory: MemoryDB,
+        mid_term_memory: MemoryDB,
+        long_term_memory: MemoryDB,
+        reflection_memory: MemoryDB,
+    ):
+        self.agent_name = agent_name
+        self.emb_model = emb_model
+        self.id_generator = id_generator
+        self.short_term_memory = short_term_memory
+        self.mid_term_memory = mid_term_memory
+        self.long_term_memory = long_term_memory
+        self.reflection_memory = reflection_memory
+        self.removed_ids: List[int] = []
+
+    @classmethod
+    def from_config(cls, config: Dict[str, Any]) -> "BrainDB":
+        """Create BrainDB from a config dictionary.
+        
+        Args:
+            config: Must contain keys: agent_name, top_k, and per-layer
+                    settings under 'short', 'mid', 'long', 'reflection'.
+        """
+        from ..config import DEFAULT_CONFIG
+        
+        id_gen = _IdGenerator()
+        emb_model = get_embedding_model()
+        emb_dim = len(emb_model.embed("test"))
+        agent_name = config.get("agent_name", "finmem_agent")
+
+        # Helper to build a MemoryDB from layer config
+        def _build_layer(name: str, layer_cfg: Dict) -> MemoryDB:
+            return MemoryDB(
+                db_name=f"{agent_name}_{name}",
+                id_generator=id_gen,
+                emb_dim=emb_dim,
+                jump_threshold_upper=layer_cfg.get("jump_threshold_upper", 999999),
+                jump_threshold_lower=layer_cfg.get("jump_threshold_lower", -999999),
+                importance_score_init=get_importance_score_initialization(name),
+                recency_score_init=RecencyScoreInitialization(),
+                compound_score_calc=LinearCompoundScore(
+                    **layer_cfg.get("compound_score_params", {})
+                ),
+                importance_score_change=LinearImportanceScoreChange(),
+                decay_function=ExponentialDecay(
+                    **layer_cfg.get("decay_params", {})
+                ),
+                clean_up_threshold_dict=layer_cfg.get(
+                    "clean_up_threshold_dict",
+                    {"recency_threshold": 0.01, "importance_threshold": 0.01}
+                ),
+            )
+
+        short_cfg = config.get("short", {})
+        mid_cfg = config.get("mid", {})
+        long_cfg = config.get("long", {})
+        reflection_cfg = config.get("reflection", {})
+
+        return cls(
+            agent_name=agent_name,
+            emb_model=emb_model,
+            id_generator=id_gen,
+            short_term_memory=_build_layer("short", short_cfg),
+            mid_term_memory=_build_layer("mid", mid_cfg),
+            long_term_memory=_build_layer("long", long_cfg),
+            reflection_memory=_build_layer("reflection", reflection_cfg),
+        )
+
+    @classmethod
+    def create_default(cls) -> "BrainDB":
+        """Create a BrainDB with sensible defaults."""
+        return cls.from_config({
+            "agent_name": "finmem_agent",
+            "short": {
+                "jump_threshold_upper": 0.8,
+                "jump_threshold_lower": -999999,  # No demotion from short
+                "decay_params": {"decay_rate": 0.99},
+                "clean_up_threshold_dict": {"recency_threshold": 0.01, "importance_threshold": 0.01},
+            },
+            "mid": {
+                "jump_threshold_upper": 0.85,
+                "jump_threshold_lower": 0.1,
+                "decay_params": {"decay_rate": 0.5},
+                "clean_up_threshold_dict": {"recency_threshold": 0.01, "importance_threshold": 0.01},
+            },
+            "long": {
+                "jump_threshold_upper": 999999,  # No promotion from long
+                "jump_threshold_lower": 0.15,
+                "decay_params": {"decay_rate": 0.1},
+                "clean_up_threshold_dict": {"recency_threshold": 0.005, "importance_threshold": 0.005},
+            },
+            "reflection": {
+                "jump_threshold_upper": 999999,  # No promotion
+                "jump_threshold_lower": -999999,  # No demotion
+                "decay_params": {"decay_rate": 0.3},
+                "clean_up_threshold_dict": {"recency_threshold": 0.005, "importance_threshold": 0.005},
+            },
+        })
+
+    def _embed(self, text: Union[str, List[str]]) -> np.ndarray:
+        """Generate embeddings for text(s)."""
+        if isinstance(text, str):
+            return np.array(self.emb_model.embed(text), dtype=np.float32).reshape(1, -1)
+        else:
+            return np.array(self.emb_model.embed_batch(text), dtype=np.float32)
+
+    # ── Add methods ──
+
+    def add_memory_short(self, symbol: str, mem_date: Union[date, datetime], text: Union[str, List[str]]) -> List[int]:
+        """Add news/short-term data to short memory."""
+        embs = self._embed(text)
+        return self.short_term_memory.add_memory(symbol, mem_date, text, embs)
+
+    def add_memory_mid(self, symbol: str, mem_date: Union[date, datetime], text: Union[str, List[str]]) -> List[int]:
+        """Add quarterly filings/trends to mid memory."""
+        embs = self._embed(text)
+        return self.mid_term_memory.add_memory(symbol, mem_date, text, embs)
+
+    def add_memory_long(self, symbol: str, mem_date: Union[date, datetime], text: Union[str, List[str]]) -> List[int]:
+        """Add annual filings/fundamentals to long memory."""
+        embs = self._embed(text)
+        return self.long_term_memory.add_memory(symbol, mem_date, text, embs)
+
+    def add_memory_reflection(self, symbol: str, mem_date: Union[date, datetime], text: Union[str, List[str]]) -> List[int]:
+        """Add reflection summaries to reflection memory."""
+        embs = self._embed(text)
+        return self.reflection_memory.add_memory(symbol, mem_date, text, embs)
+
+    # ── Query methods ──
+
+    def query_short(self, query_text: str, top_k: int, symbol: str) -> Tuple[List[str], List[int]]:
+        """Query short-term memory."""
+        emb = self._embed(query_text)
+        return self.short_term_memory.query(emb, top_k, symbol)
+
+    def query_mid(self, query_text: str, top_k: int, symbol: str) -> Tuple[List[str], List[int]]:
+        """Query mid-term memory."""
+        emb = self._embed(query_text)
+        return self.mid_term_memory.query(emb, top_k, symbol)
+
+    def query_long(self, query_text: str, top_k: int, symbol: str) -> Tuple[List[str], List[int]]:
+        """Query long-term memory."""
+        emb = self._embed(query_text)
+        return self.long_term_memory.query(emb, top_k, symbol)
+
+    def query_reflection(self, query_text: str, top_k: int, symbol: str) -> Tuple[List[str], List[int]]:
+        """Query reflection memory."""
+        emb = self._embed(query_text)
+        return self.reflection_memory.query(emb, top_k, symbol)
+
+    # ── Access counter feedback ──
+
+    def update_access_count_with_feedback(
+        self,
+        symbol: str,
+        ids: Union[List[int], int],
+        feedback: int,
+    ) -> None:
+        """Update access counters across all layers.
+        
+        Searches each layer for matching IDs to update.
+        
+        Args:
+            symbol: Stock ticker.
+            ids: Memory ID(s) to update.
+            feedback: +1 for profitable trade, -1 for loss, 0 for neutral.
+        """
+        if isinstance(ids, int):
+            ids = [ids]
+        
+        # Skip removed IDs
+        ids = [i for i in ids if i not in self.removed_ids]
+        if not ids:
+            return
+
+        feedbacks = [feedback] * len(ids)
+        
+        # Try each layer
+        success = self.short_term_memory.update_access_count_with_feedback(
+            symbol, ids, feedbacks
+        )
+        remaining = [i for i in ids if i not in success]
+        if not remaining:
+            return
+
+        feedbacks = [feedback] * len(remaining)
+        success += self.mid_term_memory.update_access_count_with_feedback(
+            symbol, remaining, feedbacks
+        )
+        remaining = [i for i in remaining if i not in success]
+        if not remaining:
+            return
+
+        feedbacks = [feedback] * len(remaining)
+        success += self.long_term_memory.update_access_count_with_feedback(
+            symbol, remaining, feedbacks
+        )
+        remaining = [i for i in remaining if i not in success]
+        if not remaining:
+            return
+
+        feedbacks = [feedback] * len(remaining)
+        self.reflection_memory.update_access_count_with_feedback(
+            symbol, remaining, feedbacks
+        )
+
+    # ── Step: decay, cleanup, jump ──
+
+    def step(self) -> None:
+        """One time step across all layers.
+        
+        1. Decay and cleanup each layer
+        2. Process memory jumps between layers (2 iterations)
+        """
+        # Step 1: decay + cleanup
+        self.removed_ids.extend(self.short_term_memory.step())
+        self.removed_ids.extend(self.mid_term_memory.step())
+        self.removed_ids.extend(self.long_term_memory.step())
+        self.removed_ids.extend(self.reflection_memory.step())
+
+        # Step 2: memory jumps (run twice for cascading)
+        for _ in range(2):
+            # Short → Up to Mid
+            up, down, deleted = self.short_term_memory.prepare_jump()
+            self.removed_ids.extend(deleted)
+            if up:
+                self.mid_term_memory.accept_jump(up, "up")
+
+            # Mid → Up to Long, Down to Short
+            up, down, deleted = self.mid_term_memory.prepare_jump()
+            self.removed_ids.extend(deleted)
+            if up:
+                self.long_term_memory.accept_jump(up, "up")
+            if down:
+                self.short_term_memory.accept_jump(down, "down")
+
+            # Long → Down to Mid
+            up, down, deleted = self.long_term_memory.prepare_jump()
+            self.removed_ids.extend(deleted)
+            if down:
+                self.mid_term_memory.accept_jump(down, "down")
+
+    # ── Stats ──
+
+    def stats(self, symbol: Optional[str] = None) -> Dict[str, Any]:
+        """Get memory statistics."""
+        def _layer_count(layer: MemoryDB) -> int:
+            if symbol:
+                return layer.get_memory_count(symbol)
+            return sum(layer.get_memory_count(s) for s in layer.universe)
+
+        return {
+            "short": _layer_count(self.short_term_memory),
+            "mid": _layer_count(self.mid_term_memory),
+            "long": _layer_count(self.long_term_memory),
+            "reflection": _layer_count(self.reflection_memory),
+            "total_removed": len(self.removed_ids),
+        }
+
+    # ── Checkpointing ──
+
+    def save_checkpoint(self, path: str) -> None:
+        """Save entire BrainDB to disk."""
+        os.makedirs(path, exist_ok=True)
+
+        state = {
+            "agent_name": self.agent_name,
+            "removed_ids": self.removed_ids,
+            "id_generator": self.id_generator,
+        }
+        with open(os.path.join(path, "state_dict.pkl"), "wb") as f:
+            pickle.dump(state, f)
+
+        self.short_term_memory.save_checkpoint("short", path)
+        self.mid_term_memory.save_checkpoint("mid", path)
+        self.long_term_memory.save_checkpoint("long", path)
+        self.reflection_memory.save_checkpoint("reflection", path)
+
+    @classmethod
+    def load_checkpoint(cls, path: str) -> "BrainDB":
+        """Load BrainDB from disk."""
+        with open(os.path.join(path, "state_dict.pkl"), "rb") as f:
+            state = pickle.load(f)
+
+        id_gen = state["id_generator"]
+        emb_model = get_embedding_model()
+
+        return cls(
+            agent_name=state["agent_name"],
+            emb_model=emb_model,
+            id_generator=id_gen,
+            short_term_memory=MemoryDB.load_checkpoint("short", path, id_gen),
+            mid_term_memory=MemoryDB.load_checkpoint("mid", path, id_gen),
+            long_term_memory=MemoryDB.load_checkpoint("long", path, id_gen),
+            reflection_memory=MemoryDB.load_checkpoint("reflection", path, id_gen),
+        )

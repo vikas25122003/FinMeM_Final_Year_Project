@@ -7,7 +7,8 @@ Based on the research paper: https://arxiv.org/abs/2311.13743
 """
 
 import argparse
-from datetime import datetime, timedelta
+import logging
+from datetime import date, datetime, timedelta
 import sys
 import os
 
@@ -15,7 +16,7 @@ import os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from finmem.simulation.simulator import TradingSimulator
-from finmem.config import DEFAULT_CONFIG
+from finmem.config import FinMEMConfig
 
 
 def main():
@@ -48,8 +49,8 @@ def main():
         "--mode", "-m",
         type=str,
         choices=["train", "test"],
-        default="test",
-        help="Mode: train (populate memory) or test (make decisions)"
+        default="train",
+        help="Mode: train (populate memory + reflect) or test (make decisions)"
     )
     
     parser.add_argument(
@@ -68,74 +69,122 @@ def main():
     )
     
     parser.add_argument(
+        "--dataset", "-d",
+        type=str,
+        default=None,
+        help="Path to pre-built dataset pickle (optional)"
+    )
+    
+    parser.add_argument(
+        "--checkpoint", "-ckp",
+        type=str,
+        default=None,
+        help="Path to load checkpoint from (resumes previous run)"
+    )
+    
+    parser.add_argument(
+        "--save-checkpoint",
+        type=str,
+        default=None,
+        help="Path to save checkpoint after run"
+    )
+    
+    parser.add_argument(
+        "--top-k",
+        type=int,
+        default=5,
+        help="Cognitive span: memories per layer to retrieve (default: 5)"
+    )
+    
+    parser.add_argument(
         "--quiet", "-q",
         action="store_true",
         help="Quiet mode (less output)"
     )
     
+    parser.add_argument(
+        "--verbose", "-v",
+        action="store_true",
+        help="Verbose logging"
+    )
+    
     args = parser.parse_args()
+    
+    # Configure logging
+    log_level = logging.DEBUG if args.verbose else logging.INFO
+    logging.basicConfig(
+        level=log_level,
+        format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S",
+    )
     
     # Parse dates
     if args.end_date:
-        end_date = datetime.strptime(args.end_date, "%Y-%m-%d")
+        end_date = datetime.strptime(args.end_date, "%Y-%m-%d").date()
     else:
-        end_date = datetime.now()
+        end_date = date.today()
     
     if args.start_date:
-        start_date = datetime.strptime(args.start_date, "%Y-%m-%d")
+        start_date = datetime.strptime(args.start_date, "%Y-%m-%d").date()
     else:
         start_date = end_date - timedelta(days=30)
     
-    # Update config
-    config = DEFAULT_CONFIG
+    # Build config
+    config = FinMEMConfig()
     config.initial_capital = args.capital
+    config.memory.top_k = args.top_k
     
     risk_map = {
         "conservative": 0.3,
         "moderate": 0.5,
-        "aggressive": 0.7
+        "aggressive": 0.7,
     }
     config.profile.risk_tolerance = risk_map[args.risk]
     
-    # Create and run simulator
-    print("\n" + "="*60)
-    print("🧠 FinMEM Trading Agent")
-    print("="*60)
+    # Create simulator (from checkpoint or fresh)
+    if args.checkpoint and os.path.exists(args.checkpoint):
+        print(f"\n  📦 Loading checkpoint from {args.checkpoint}...")
+        simulator = TradingSimulator.load_checkpoint(args.checkpoint)
+    else:
+        simulator = TradingSimulator(config)
     
-    simulator = TradingSimulator(config)
-    
+    # Run simulation
     result = simulator.run(
         ticker=args.ticker,
         start_date=start_date,
         end_date=end_date,
         mode=args.mode,
-        verbose=not args.quiet
+        initial_capital=args.capital,
+        dataset_path=args.dataset,
+        verbose=not args.quiet,
     )
     
-    # Print results
-    print("\n" + "="*60)
-    print("📊 Simulation Results")
-    print("="*60)
-    print(f"Period: {result.start_date.date()} to {result.end_date.date()}")
-    print(f"Initial Capital: ${result.initial_capital:,.2f}")
-    print(f"Final Value: ${result.final_value:,.2f}")
-    print(f"Total Return: {result.total_return:.2f}%")
-    print(f"Decisions Made: {len(result.decisions)}")
-    print(f"Trades Executed: {len(result.trades)}")
+    # Save checkpoint if requested
+    if args.save_checkpoint:
+        simulator.save_checkpoint(args.save_checkpoint)
+        print(f"  💾 Checkpoint saved to {args.save_checkpoint}")
     
-    if result.decisions:
-        print("\n📈 Latest Decision:")
-        latest = result.decisions[-1]
-        print(f"  Action: {latest.action.value}")
-        print(f"  Confidence: {latest.confidence:.0%}")
-        print(f"  Reasoning: {latest.reasoning[:200]}...")
+    # Print summary
+    print(f"\n{'='*60}")
+    print(f"  📊 Results Summary")
+    print(f"{'='*60}")
+    print(f"  Period:        {result.start_date} → {result.end_date}")
+    print(f"  Days:          {result.days_processed}")
+    print(f"  Mode:          {result.mode}")
+    print(f"  Initial:       ${result.initial_capital:,.2f}")
+    print(f"  Final:         ${result.final_value:,.2f}")
+    print(f"  Return:        ${result.total_return:,.2f} ({result.total_return_pct:+.2f}%)")
+    print(f"  Memory Stats:  {result.memory_stats}")
     
-    if result.trades:
-        print("\n💰 Trades:")
-        for trade in result.trades[-5:]:  # Show last 5
-            print(f"  {trade['action']} {trade['shares']:.2f} shares @ ${trade['price']:.2f}")
+    # Show last few trades
+    trades = [t for t in result.trades if t.get("action") != "HOLD"]
+    if trades:
+        print(f"\n  💰 Trades ({len(trades)} total):")
+        for trade in trades[-5:]:
+            print(f"    {trade.get('date')} | {trade.get('action')} "
+                  f"{trade.get('shares_traded', 0):.2f} shares @ ${trade.get('price', 0):.2f}")
     
-    print("\n" + "="*60)
+    print(f"\n{'='*60}")
 
 
 if __name__ == "__main__":
