@@ -1,85 +1,138 @@
-# 🧠 FinMEM — LLM Trading Agent with Layered Memory
+# 🧠 FinMEM — LLM Trading Agent with Layered Memory & Character Design
 
-A Python implementation of the **FinMEM** trading agent based on the research paper:
-> *"FinMem: A Performance-Enhanced LLM Trading Agent with Layered Memory and Character Design"* — [arXiv:2311.13743](https://arxiv.org/abs/2311.13743)
+**A paper-faithful Python implementation of the FinMEM trading agent for automated stock trading using Large Language Models with a cognitive memory architecture.**
 
-[![Python 3.9+](https://img.shields.io/badge/python-3.9+-blue.svg)](https://www.python.org/downloads/)
+> Based on: *"FinMem: A Performance-Enhanced LLM Trading Agent with Layered Memory and Character Design"* — [arXiv:2311.13743](https://arxiv.org/abs/2311.13743)
+
+[![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![arXiv](https://img.shields.io/badge/arXiv-2311.13743-b31b1b.svg)](https://arxiv.org/abs/2311.13743)
 
 ---
 
-## ✨ Features
+## 📌 Project Overview
 
-- **🧠 4-Layer Memory System** — Short / Mid / Long / Reflection memory with FAISS-style vector search
-- **🔄 Memory Promotion & Demotion** — Memories automatically move between layers based on importance thresholds (the paper's "jump" mechanism)
-- **📉 Exponential Decay** — Recency scores decay over time; stale memories are cleaned up automatically
-- **🎯 Access Counter Feedback** — Portfolio P&L feeds back into memory importance (profitable memories get boosted)
-- **💡 LLM Reflection (Working Memory)** — Queries all 4 layers, sends context to LLM, stores structured reflections
-- **📅 Day-by-Day Simulation** — Processes one trading day at a time (train & test modes)
-- **💾 Checkpointing** — Save/load full agent state to resume training or switch to test mode
-- **📊 Real-Time Data** — Yahoo Finance prices + Finnhub/Google News
-- **🎭 Agent Profiling** — Configurable risk tolerance, trading style, and character string
+FinMEM is an **LLM-powered autonomous trading agent** that mimics human cognitive processes for financial decision-making. Unlike traditional algorithmic trading (rule-based) or Deep Reinforcement Learning approaches (PPO, DQN), FinMEM uses:
+
+1. **Layered Memory** — A 4-tier memory system (short/mid/long/reflection) inspired by human cognitive architecture
+2. **Self-Adaptive Character** — Dynamically switches between risk-seeking and risk-averse modes based on recent performance
+3. **Working Memory Operations** — Summarization, Observation, and Reflection pipelines powered by LLMs
+4. **Memory Promotion/Demotion** — Important memories automatically "jump" to deeper layers, stale ones decay
+
+### Why This Matters
+
+Traditional trading bots use fixed rules. DRL agents need millions of training episodes. FinMEM leverages the **reasoning capabilities of LLMs** combined with a structured memory system to make informed trading decisions — much closer to how a human analyst thinks.
 
 ---
 
-## 🏗️ Architecture (from the paper)
+## 🏗️ System Architecture
 
 ```
-┌─────────────────────────────────────────────────────────┐
-│                    FinMEM Agent                         │
-├──────────┬──────────────────────────┬───────────────────┤
-│ Profiling│     Layered Memory       │    Decision       │
-│  Module  │                          │    Module         │
-│          │  ┌──────────────────┐    │                   │
-│ Character│  │  Short-term      │←───│  Working Memory   │
-│  String  │  │  (News, Prices)  │    │  (LLM Reflection) │
-│          │  ├──────────────────┤    │                   │
-│ Risk     │  │  Mid-term        │    │  Train: Reflect   │
-│ Profile  │  │  (Q Filings)     │    │  with future      │
-│          │  ├──────────────────┤    │  record            │
-│ Trading  │  │  Long-term       │    │                   │
-│ Style    │  │  (Annual/Fundas) │    │  Test: Decide     │
-│          │  ├──────────────────┤    │  buy/hold/sell    │
-│          │  │  Reflection      │    │  with momentum    │
-│          │  │  (Past Insights) │    │                   │
-│          │  └──────────────────┘    │                   │
-├──────────┴──────────────────────────┴───────────────────┤
-│              Market Environment (Day-by-Day)            │
-│           Portfolio Tracker + Feedback Loop              │
-└─────────────────────────────────────────────────────────┘
+┌───────────────────────────────────────────────────────────────────────────┐
+│                          FinMEM Trading Agent                             │
+├──────────────┬────────────────────────────────┬───────────────────────────┤
+│  PROFILING   │       LAYERED MEMORY           │    DECISION MODULE        │
+│  MODULE      │                                │                           │
+│              │  ┌──────────────────────────┐  │  Working Memory Ops:      │
+│ Self-Adaptive│  │ SHORT-TERM (Q=14 days)   │←─│  1. Summarization (LLM)   │
+│ Character    │  │ Daily news summaries,    │  │  2. Observation  (LLM)    │
+│              │  │ price observations       │  │  3. Reflection   (LLM)    │
+│ Switches:    │  ├──────────────────────────┤  │                           │
+│ risk_seeking │  │ MID-TERM (Q=90 days)     │  │  Train: Reflect with      │
+│     ↕        │  │ 10-Q quarterly filings   │  │  future price labels      │
+│ risk_averse  │  ├──────────────────────────┤  │                           │
+│              │  │ LONG-TERM (Q=365 days)   │  │  Test: Buy/Hold/Sell      │
+│ Based on     │  │ 10-K annual reports      │  │  decisions with momentum  │
+│ 3-day return │  ├──────────────────────────┤  │                           │
+│              │  │ REFLECTION               │  │  Guardrails AI:           │
+│              │  │ Past trading insights    │  │  LLM identifies pivotal   │
+│              │  └──────────────────────────┘  │  memories → +0.05 bonus   │
+├──────────────┴────────────────────────────────┴───────────────────────────┤
+│                    Market Environment (Day-by-Day Simulation)              │
+│              Yahoo Finance │ SEC EDGAR Filings │ Google/Finnhub News       │
+├───────────────────────────────────────────────────────────────────────────┤
+│              Portfolio (Single-Share Trading) + Feedback Loop              │
+│              5 Metrics: Sharpe │ Volatility │ Drawdown │ CR │ B&H         │
+└───────────────────────────────────────────────────────────────────────────┘
 ```
 
-### Memory Scoring
+---
 
-Each memory has three score components:
+## 🔬 Paper-Faithful Implementation Details
+
+### Memory Scoring (Exact Match to Paper)
+
+| Component | Formula | Description |
+|-----------|---------|-------------|
+| **Recency Decay** | `S_recency = e^(-δ / Q_l)` | Q_l = 14 (short), 90 (mid), 365 (long) days |
+| **Importance Decay** | `S_importance = v × α_l^δ` | α_l = 0.9, 0.967, 0.988 per layer |
+| **Importance Init** | `v ∈ {0.4, 0.6, 0.8}` | Probabilistic sampling, layer-dependent |
+| **Compound Score** | `γ = S_recency + S_relevancy + S_importance` | Pure additive sum (paper §3.2) |
+| **Similarity** | FAISS `IndexFlatIP` | Cosine similarity via normalized inner product |
+
+### Memory Promotion (Jump Mechanism)
 
 ```
-Compound Score = w_recency × Recency + w_importance × Importance
-Final Rank     = w_compound × Compound + w_similarity × Similarity(query)
+Short ──→ Mid ──→ Long          (importance ≥ threshold → promote)
+Short ←── Mid ←── Long          (importance < threshold → demote)
+         ↑                      On promotion: recency resets to 1.0
+         └── LLM Promotion: pivotal memories get +0.05 bonus
 ```
 
-| Component | Mechanism |
-|-----------|-----------|
-| **Recency** | Exponential decay: `e^(-λ × Δt)`, resets on promotion |
-| **Importance** | Initialized per layer, updated by access counter feedback |
-| **Similarity** | Cosine similarity via sentence-transformers embeddings |
+### Self-Adaptive Character (Paper §3.1)
 
-### Memory Jump (Promotion / Demotion)
+```python
+if 3_day_cumulative_return >= 0:
+    character = "risk_seeking"   # Confident → aggressive trades
+else:
+    character = "risk_averse"    # Losing → conservative/defensive
+```
 
-| Transition | Condition |
-|------------|-----------|
-| Short → Mid | `importance ≥ 0.80` |
-| Mid → Long | `importance ≥ 0.85` |
-| Mid → Short | `importance < 0.10` |
-| Long → Mid | `importance < 0.15` |
+### Three Working Memory Operations (Paper §3.3)
+
+| Step | Operation | What It Does |
+|------|-----------|--------------|
+| 1 | **Summarization** | LLM condenses raw news into key financial insights |
+| 2 | **Observation** | LLM analyzes price patterns, momentum, support/resistance |
+| 3 | **Reflection** | LLM queries all 4 memory layers, makes buy/hold/sell decision |
+
+### Evaluation Metrics (Paper §4)
+
+| Metric | Formula |
+|--------|---------|
+| Cumulative Return | `(V_final - V_initial) / V_initial` |
+| Sharpe Ratio | `mean(daily_returns) / std(daily_returns) × √252` |
+| Annualized Volatility | `std(daily_returns) × √252` |
+| Daily Volatility | `std(daily_returns)` |
+| Max Drawdown | `max((peak - trough) / peak)` |
+
+---
+
+## ✨ Key Features
+
+- 🧠 **4-Layer Memory System** — Short / Mid / Long / Reflection with FAISS vector search
+- 🔄 **Memory Promotion & Demotion** — Automatic "jump" mechanism based on importance thresholds
+- 📉 **Exponential Decay** — Paper-exact `e^(-δ/Q_l)` recency scoring
+- 🎭 **Self-Adaptive Character** — Dynamic risk mode switching on 3-day returns
+- 🔍 **3 Working Memory Operations** — Summarize → Observe → Reflect pipeline
+- ⭐ **LLM-Based Promotion** — Guardrails AI equivalent: pivotal memories get boosted
+- 📰 **Real News Integration** — Google News RSS + Finnhub API
+- 📄 **SEC EDGAR Filings** — Real 10-K and 10-Q filing text (no API key needed)
+- 📊 **5 Paper Metrics + Buy & Hold Baseline** — Complete evaluation framework
+- 💰 **Single-Share Trading** — Paper-faithful position sizing
+- 💾 **Checkpointing** — Save/load full agent state
+- 📅 **Day-by-Day Simulation** — Train & test modes with separate data splits
 
 ---
 
 ## 🚀 Quick Start
 
-### 1. Setup Environment
+### 1. Clone & Setup
 ```bash
-# Create and activate virtual environment
+git clone https://github.com/vikas25122003/FinMeM_Final_Year_Project.git
+cd FinMeM_Final_Year_Project
+
+# Create virtual environment
 python3 -m venv .venv
 source .venv/bin/activate
 
@@ -88,83 +141,37 @@ pip install -r requirements.txt
 ```
 
 ### 2. Configure API Keys
-Create a `.env` file:
+Create a `.env` file in the project root:
 ```env
-# Required: LLM access via OpenRouter
+# Required: LLM access via OpenRouter (get key at https://openrouter.ai/)
 OPENROUTER_API_KEY=your_openrouter_key_here
 
-# Optional: Better news via Finnhub (free at https://finnhub.io/)
+# Optional: Better news coverage via Finnhub (free at https://finnhub.io/)
 FINNHUB_API_KEY=your_finnhub_key_here
 ```
 
 ### 3. Run the Agent
+
 ```bash
-# Train mode — populate memory + reflect with known future prices
-python3 run.py --ticker AAPL -s 2024-01-01 -e 2024-02-01 --mode train
+# Train mode — Agent learns from historical data with future price labels
+python3 run.py --ticker TSLA --start-date 2025-01-01 --end-date 2025-01-31 --mode train
 
-# Test mode — make real buy/hold/sell decisions
-python3 run.py --ticker AAPL -s 2024-02-01 -e 2024-03-01 --mode test
+# Test mode — Agent makes real buy/hold/sell decisions (no future data)
+python3 run.py --ticker TSLA --start-date 2025-02-01 --end-date 2025-02-28 --mode test
 
-# With checkpoint (train, save, then test)
-python3 run.py --ticker AAPL --mode train --save-checkpoint data/checkpoints/aapl
-python3 run.py --ticker AAPL --mode test  --checkpoint data/checkpoints/aapl
+# Full pipeline: Train → Save → Test
+python3 run.py --ticker TSLA --mode train --save-checkpoint data/checkpoints/tsla \
+    --start-date 2025-01-01 --end-date 2025-01-31
+python3 run.py --ticker TSLA --mode test --checkpoint data/checkpoints/tsla \
+    --start-date 2025-02-01 --end-date 2025-02-28
 ```
 
----
-
-## 📋 CLI Options
-
-| Option | Description | Default |
-|--------|-------------|---------|
-| `--ticker, -t` | Stock symbol | `AAPL` |
-| `--mode, -m` | `train` or `test` | `train` |
-| `--risk` | `conservative`, `moderate`, `aggressive` | `moderate` |
-| `--capital, -c` | Initial capital ($) | `100000` |
-| `--start-date, -s` | Start date (YYYY-MM-DD) | 30 days ago |
-| `--end-date, -e` | End date (YYYY-MM-DD) | today |
-| `--dataset, -d` | Path to pre-built dataset pickle | auto-build |
-| `--checkpoint, -ckp` | Path to load checkpoint from | — |
-| `--save-checkpoint` | Path to save checkpoint after run | — |
-| `--top-k` | Cognitive span: memories per layer | `5` |
-| `--quiet, -q` | Suppress output | `false` |
-| `--verbose, -v` | Enable debug logging | `false` |
-
----
-
-## 📁 Project Structure
-
-```
-FinMeM/
-├── run.py                          # CLI entry point
-├── requirements.txt                # Dependencies
-├── .env                            # API keys (not tracked)
-├── .gitignore
-└── finmem/
-    ├── config.py                   # Per-layer memory config, agent settings
-    ├── llm_client.py               # OpenRouter API client
-    │
-    ├── memory/                     # 📦 Layered Memory System
-    │   ├── embeddings.py           # sentence-transformers embeddings
-    │   ├── memory_functions.py     # Decay, scoring, importance functions
-    │   └── layered_memory.py       # MemoryDB (per-layer) + BrainDB (4-layer orchestrator)
-    │
-    ├── decision/                   # 🤖 Decision / Working Memory
-    │   ├── prompts.py              # Train/test prompt templates
-    │   └── reflection.py           # LLM reflection (working memory mechanism)
-    │
-    ├── profiling/                  # 🎭 Agent Profiling
-    │   └── agent_profile.py        # Risk levels, trading styles, character
-    │
-    ├── data/                       # 📊 Data Pipeline
-    │   ├── build_dataset.py        # Build pickle datasets from Yahoo Finance
-    │   ├── price_fetcher.py        # Price data via yfinance
-    │   ├── news_fetcher.py         # Google News RSS
-    │   └── finnhub_news.py         # Finnhub news API
-    │
-    └── simulation/                 # 🔄 Simulation Engine
-        ├── simulator.py            # Main agent: day-by-day step loop
-        ├── environment.py          # Market environment (day stepper)
-        └── portfolio.py            # Portfolio tracker + feedback
+### 4. Enable FAISS (Optional)
+```bash
+# FAISS is installed but disabled by default (compatibility issues on some platforms)
+# To enable FAISS vector search backend:
+export FINMEM_USE_FAISS=1
+python3 run.py --ticker TSLA --mode train
 ```
 
 ---
@@ -173,71 +180,178 @@ FinMeM/
 
 ```
 ============================================================
-  FinMEM Trading Simulation
-  Ticker: AAPL | Mode: train
-  Period: 2024-01-01 → 2024-02-01
+  FinMEM Trading Simulation (Paper-Faithful)
+  Ticker: TSLA | Mode: train
+  Period: 2025-01-01 → 2025-01-31
   Capital: $100,000.00
+  Character: Self-Adaptive (paper default)
 ============================================================
 
-  Day 1: 2024-01-02 | $183.73 | Cash: $100,000.00, Shares: 0.00
-  Day 6: 2024-01-09 | $183.24 | Cash: $100,483.50, Shares: 0.00
+  Building dataset from Yahoo Finance...
+  Fetched 10-K: 5043 chars (SEC EDGAR)
+  Fetched 10-Q: 5043 chars (SEC EDGAR)
+  Built dataset: 20 days
+
+  Day 1: 2025-01-02 | $379.28 | [risk_seeking]
+  Day 4: 2025-01-07 | $394.36 | Character switched: risk_seeking → risk_averse (-3.78%)
+  Day 6: 2025-01-10 | $394.74 | Character switched: risk_averse → risk_seeking (+2.27%)
   ...
 
 ============================================================
-  Simulation Complete
-  Days Processed: 21
-  Final Value:    $102,881.51
-  Total Return:   $2,881.51 (+2.88%)
-  Memory Stats:   {short: 4, mid: 0, long: 0, reflection: 17, total_removed: 20}
+  📊 Results Summary
 ============================================================
+  Period:        2025-01-01 → 2025-01-31
+  Days:          19
+  Initial:       $100,000.00
+  Final:         $100,111.21
+  Return:        $111.21 (+0.11%)
+
+  📈 Paper Metrics (FinMEM vs Buy & Hold):
+  ──────────────────────────────────────────────────
+  Metric                          FinMEM          B&H
+  Cum. Return (%)                  0.11%        5.54%
+  Sharpe Ratio                    5.2428       1.6356
+  Ann. Volatility                 0.0030       0.5455
+  Daily Volatility              0.000187     0.034364
+  Max Drawdown (%)                 0.02%        9.14%
+
+  Memory Stats:  short: 19, mid: 12, long: 16, reflection: 19
+  Trades: 16 (single-share)
+============================================================
+```
+
+> **Note**: FinMEM trades conservatively (1 share at a time) — lower returns but **much better risk-adjusted performance** (Sharpe: 5.24 vs 1.64, Max Drawdown: 0.02% vs 9.14%).
+
+---
+
+## 📋 CLI Options
+
+| Option | Description | Default |
+|--------|-------------|---------|
+| `--ticker, -t` | Stock symbol (TSLA, AAPL, MSFT, etc.) | `AAPL` |
+| `--mode, -m` | `train` (with labels) or `test` (blind) | `train` |
+| `--risk` | `conservative`, `moderate`, `aggressive` | `moderate` |
+| `--capital, -c` | Initial portfolio capital ($) | `100000` |
+| `--start-date, -s` | Simulation start (YYYY-MM-DD) | 30 days ago |
+| `--end-date, -e` | Simulation end (YYYY-MM-DD) | today |
+| `--dataset, -d` | Pre-built dataset pickle path | auto-build |
+| `--checkpoint, -ckp` | Load checkpoint from path | — |
+| `--save-checkpoint` | Save checkpoint after run | — |
+| `--top-k` | Memories retrieved per layer (cognitive span) | `5` |
+| `--quiet, -q` | Suppress output | `false` |
+| `--verbose, -v` | Debug logging | `false` |
+
+---
+
+## 📁 Project Structure
+
+```
+FinMeM/
+├── run.py                              # CLI entry point
+├── requirements.txt                    # Dependencies
+├── .env                                # API keys (not tracked)
+├── .gitignore
+│
+├── finmem/
+│   ├── config.py                       # All paper parameters (Q_l, α_l, thresholds)
+│   ├── llm_client.py                   # OpenRouter API client
+│   │
+│   ├── memory/                         # 📦 Layered Memory System
+│   │   ├── embeddings.py              # sentence-transformers (all-MiniLM-L6-v2)
+│   │   ├── memory_functions.py        # Paper formulas: decay, scoring, importance
+│   │   └── layered_memory.py          # MemoryDB + BrainDB (4-layer orchestrator + FAISS)
+│   │
+│   ├── decision/                       # 🤖 Decision / Working Memory
+│   │   ├── prompts.py                 # Train/test prompt templates
+│   │   └── reflection.py             # 3 ops: summarize_news → observe_price → reflect
+│   │
+│   ├── profiling/                      # 🎭 Self-Adaptive Profiling
+│   │   └── agent_profile.py           # Dynamic risk_seeking ↔ risk_averse switching
+│   │
+│   ├── data/                           # 📊 Data Pipeline
+│   │   ├── build_dataset.py           # Build datasets (Yahoo + SEC + News)
+│   │   ├── sec_filings.py            # SEC EDGAR 10-K/10-Q fetcher
+│   │   ├── price_fetcher.py          # Yahoo Finance via yfinance
+│   │   ├── news_fetcher.py           # Google News RSS
+│   │   └── finnhub_news.py           # Finnhub news API
+│   │
+│   ├── evaluation/                     # 📈 Paper Metrics
+│   │   ├── __init__.py
+│   │   └── metrics.py                # 5 metrics + Buy & Hold baseline
+│   │
+│   └── simulation/                     # 🔄 Simulation Engine
+│       ├── simulator.py               # Main loop: all paper components wired
+│       ├── environment.py             # Market environment (day stepper)
+│       └── portfolio.py               # Single-share trading + feedback
+│
+└── tests/                              # Unit tests for paper formulas
 ```
 
 ---
 
-## 🔧 Configuration
+## 🔧 Paper Parameters (config.py)
 
-All settings are in `finmem/config.py`:
+### Memory Layer Configuration
 
-### Memory Layer Defaults
+| Layer | Q_l (Stability) | α_l (Importance Decay) | Jump Up | Jump Down |
+|-------|-----------------|----------------------|---------|-----------|
+| Short | 14 days | 0.900 | ≥ 0.80 → Mid | — |
+| Mid | 90 days | 0.967 | ≥ 0.85 → Long | < 0.10 → Short |
+| Long | 365 days | 0.988 | — | < 0.15 → Mid |
+| Reflection | 90 days | 0.967 | — | — |
 
-| Layer | Decay Rate | Jump Up Threshold | Jump Down Threshold |
-|-------|-----------|-------------------|---------------------|
-| Short | 0.99 (fast decay) | 0.80 → Mid | — |
-| Mid | 0.50 | 0.85 → Long | 0.10 → Short |
-| Long | 0.10 (slow decay) | — | 0.15 → Mid |
-| Reflection | 0.30 | — | — |
+### Trading Configuration
 
-### Key Parameters
-
-| Parameter | Default | Description |
-|-----------|---------|-------------|
-| `top_k` | 5 | Memories retrieved per layer (cognitive span) |
-| `initial_capital` | $100,000 | Starting portfolio cash |
-| `max_position_size` | 20% | Max allocation per trade |
-| `look_back_window_size` | 7 | Days for momentum calculation |
+| Parameter | Value | Source |
+|-----------|-------|--------|
+| Position Size | 1 share per trade | Paper §4.1 |
+| Cognitive Span (top_k) | 5 per layer | Paper §3.3 |
+| LLM Promotion Bonus | +0.05 importance | Paper §3.2 |
+| Initial Capital | $100,000 | Paper §4.1 |
 
 ---
 
-## 🔑 API Keys
+## 🔑 API Keys & Data Sources
 
-| Service | Purpose | Cost | Link |
-|---------|---------|------|------|
-| **OpenRouter** | LLM access (DeepSeek, GPT-4, etc.) | Pay-per-token | [openrouter.ai](https://openrouter.ai/) |
-| **Finnhub** | Stock news (optional) | Free tier | [finnhub.io](https://finnhub.io/) |
+| Service | Purpose | Cost | Required? |
+|---------|---------|------|-----------|
+| [**OpenRouter**](https://openrouter.ai/) | LLM access (GPT-4, DeepSeek, etc.) | Pay-per-token | ✅ Required |
+| [**SEC EDGAR**](https://www.sec.gov/edgar) | 10-K/10-Q filing text | Free (no key) | ✅ Auto-fetched |
+| [**Yahoo Finance**](https://finance.yahoo.com/) | Stock price data | Free (no key) | ✅ Auto-fetched |
+| [**Finnhub**](https://finnhub.io/) | Stock news articles | Free tier | ⬜ Optional |
+| **Sentence-Transformers** | Text embeddings (local) | Free (no key) | ✅ Auto-downloaded |
 
-> **Note**: Embeddings use `sentence-transformers/all-MiniLM-L6-v2` locally — no API key needed.
+---
+
+## 🧪 Testing
+
+```bash
+# Run unit tests
+python3 -m pytest tests/ -v
+
+# Quick smoke test (verify all imports work)
+python3 -c "from finmem.simulation.simulator import TradingSimulator; print('OK')"
+```
 
 ---
 
 ## 📚 References
 
-- **Paper**: [FinMem: A Performance-Enhanced LLM Trading Agent with Layered Memory and Character Design](https://arxiv.org/abs/2311.13743)  
+- **Paper**: [FinMem: A Performance-Enhanced LLM Trading Agent with Layered Memory and Character Design](https://arxiv.org/abs/2311.13743) (Yu et al., 2023)
 - **Reference Implementation**: [pipiku915/FinMem-LLM-StockTrading](https://github.com/pipiku915/FinMem-LLM-StockTrading)
 - **OpenRouter API**: [openrouter.ai/docs](https://openrouter.ai/docs)
-- **sentence-transformers**: [sbert.net](https://www.sbert.net/)
+- **Sentence-Transformers**: [sbert.net](https://www.sbert.net/)
+- **SEC EDGAR**: [sec.gov/edgar](https://www.sec.gov/edgar/searchedgar/companysearch)
+- **FAISS**: [github.com/facebookresearch/faiss](https://github.com/facebookresearch/faiss)
 
 ---
 
 ## 📄 License
 
-MIT License
+MIT License — See [LICENSE](LICENSE) for details.
+
+---
+
+> **CS Final Year Project** by Vikas R M Jaivignesha  
+> Department of Computer Science  
+> Implementation of research paper arXiv:2311.13743

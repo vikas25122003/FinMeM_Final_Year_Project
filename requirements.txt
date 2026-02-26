@@ -5,12 +5,12 @@ python-dotenv>=1.0.0
 # Stock data
 yfinance>=0.2.36
 
-# Embeddings (local, free)
+# Embeddings (local, free — no API key)
 sentence-transformers>=2.2.2
 torch>=2.0.0
 
-# Vector storage
-chromadb>=0.4.22
+# Vector database (paper's FAISS backend)
+faiss-cpu>=1.7.4
 
 # News parsing
 feedparser>=6.0.10

@@ -174,7 +174,21 @@ def main():
     print(f"  Initial:       ${result.initial_capital:,.2f}")
     print(f"  Final:         ${result.final_value:,.2f}")
     print(f"  Return:        ${result.total_return:,.2f} ({result.total_return_pct:+.2f}%)")
-    print(f"  Memory Stats:  {result.memory_stats}")
+    
+    # Paper's 5 evaluation metrics
+    if result.metrics:
+        print(f"\n  📈 Paper Metrics (FinMEM vs Buy & Hold):")
+        print(f"  {'─'*50}")
+        m = result.metrics
+        bh = result.bh_metrics
+        print(f"  {'Metric':<25} {'FinMEM':>12} {'B&H':>12}")
+        print(f"  {'Cum. Return (%)':<25} {m.get('cumulative_return_pct', 0):>11.2f}% {bh.get('cumulative_return_pct', 0):>11.2f}%")
+        print(f"  {'Sharpe Ratio':<25} {m.get('sharpe_ratio', 0):>12.4f} {bh.get('sharpe_ratio', 0):>12.4f}")
+        print(f"  {'Ann. Volatility':<25} {m.get('annualized_volatility', 0):>12.4f} {bh.get('annualized_volatility', 0):>12.4f}")
+        print(f"  {'Daily Volatility':<25} {m.get('daily_volatility', 0):>12.6f} {bh.get('daily_volatility', 0):>12.6f}")
+        print(f"  {'Max Drawdown (%)':<25} {m.get('max_drawdown_pct', 0):>11.2f}% {bh.get('max_drawdown_pct', 0):>11.2f}%")
+    
+    print(f"\n  Memory Stats:  {result.memory_stats}")
     
     # Show last few trades
     trades = [t for t in result.trades if t.get("action") != "HOLD"]
