@@ -35,6 +35,7 @@ def build_dataset(
     output_path: Optional[str] = None,
     include_news: bool = True,
     news_source: str = "google",
+    include_filings: bool = True,
 ) -> Dict[date, Dict[str, Any]]:
     """Build a date-indexed dataset for MarketEnvironment.
     
@@ -45,6 +46,7 @@ def build_dataset(
         output_path: If set, save as pickle to this path.
         include_news: Whether to fetch news (requires API calls).
         news_source: "google" or "finnhub".
+        include_filings: Whether to fetch SEC EDGAR filings.
         
     Returns:
         Date-indexed dictionary with price, news, and filing data.
@@ -62,6 +64,26 @@ def build_dataset(
         logger.error(f"No price data for {ticker}")
         return {}
     
+    # Fetch SEC filings (once, applied to all days)
+    filing_k_text = ""
+    filing_q_text = ""
+    if include_filings:
+        try:
+            from .sec_filings import fetch_filings_for_dataset
+            filings = fetch_filings_for_dataset(
+                ticker=ticker,
+                start_date=start_date,
+                end_date=end_date,
+            )
+            filing_k_text = filings.get("filing_k", "")
+            filing_q_text = filings.get("filing_q", "")
+            if filing_k_text:
+                logger.info(f"Fetched 10-K: {len(filing_k_text)} chars")
+            if filing_q_text:
+                logger.info(f"Fetched 10-Q: {len(filing_q_text)} chars")
+        except Exception as e:
+            logger.warning(f"SEC filing fetch failed: {e}")
+    
     # Build the dataset
     dataset: Dict[date, Dict[str, Any]] = {}
     
@@ -70,8 +92,8 @@ def build_dataset(
         
         dataset[day] = {
             "price": {ticker: float(row["Close"])},
-            "filing_k": {ticker: ""},  # Placeholder — no live filing source
-            "filing_q": {ticker: ""},
+            "filing_k": {ticker: filing_k_text},
+            "filing_q": {ticker: filing_q_text},
             "news": {ticker: []},
         }
     

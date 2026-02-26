@@ -1,15 +1,17 @@
 """
-Trading Simulator
+Trading Simulator — Paper-Faithful Implementation
 
 The main agent class that orchestrates the FinMEM trading loop.
 Processes one trading day at a time through the step() method:
 
 1. Receive market info from environment
-2. Store data in appropriate memory layers
-3. Run reflection (LLM-based analysis)
-4. Execute trade decision
-5. Update access counters from portfolio feedback
-6. Memory system step (decay, cleanup, jumps)
+2. Summarize news via LLM (working memory: summarization)
+3. Store summarized data in appropriate memory layers
+4. Update self-adaptive character based on 3-day return
+5. Run reflection (LLM-based analysis)
+6. Execute trade decision (1 share per paper)
+7. Update access counters from portfolio feedback
+8. Memory system step (decay, cleanup, jumps)
 """
 
 import os
@@ -22,7 +24,9 @@ from dataclasses import dataclass, field
 from ..config import FinMEMConfig, DEFAULT_CONFIG
 from ..memory.layered_memory import BrainDB
 from ..llm_client import LLMClient
-from ..decision.reflection import trading_reflection
+from ..decision.reflection import trading_reflection, summarize_news, observe_price
+from ..profiling.agent_profile import AgentProfile
+from ..evaluation.metrics import compute_metrics, compute_buy_and_hold, format_metrics_report
 from .environment import MarketEnvironment
 from .portfolio import Portfolio
 from ..data.build_dataset import build_dataset, load_dataset
@@ -45,16 +49,21 @@ class SimulationResult:
     trades: List[Dict[str, Any]]
     reflection_results: Dict[date, Dict[str, Any]]
     memory_stats: Dict[str, Any]
+    # Paper metrics
+    metrics: Dict[str, Any] = field(default_factory=dict)
+    bh_metrics: Dict[str, Any] = field(default_factory=dict)
 
 
 class TradingSimulator:
-    """FinMEM Trading Agent.
+    """FinMEM Trading Agent — Paper-Faithful Implementation.
     
-    Orchestrates the full trading pipeline:
-    - Memory system (BrainDB with 4 layers)
-    - Reflection (LLM-based working memory)
-    - Portfolio management
-    - Day-by-day market simulation
+    Orchestrates the full trading pipeline per the paper:
+    - Self-adaptive character profiling (switches risk on 3-day return)
+    - Memory system (BrainDB with 4 layers, paper-exact decay)
+    - Working memory operations (summarization → reflection)
+    - LLM-based promotion of pivotal memories (+5 bonus)
+    - Single-share portfolio management
+    - 5-metric evaluation (Sharpe, CR, Vol, Drawdown)
     """
 
     def __init__(
@@ -62,12 +71,6 @@ class TradingSimulator:
         config: Optional[FinMEMConfig] = None,
         brain: Optional[BrainDB] = None,
     ):
-        """Initialize the trading simulator.
-        
-        Args:
-            config: Configuration (uses defaults if None).
-            brain: Pre-built BrainDB (creates from config if None).
-        """
         self.config = config or DEFAULT_CONFIG
         
         # Initialize LLM client
@@ -75,6 +78,9 @@ class TradingSimulator:
         
         # Initialize memory system
         self.brain = brain or BrainDB.from_config(self.config.get_brain_config())
+        
+        # Initialize self-adaptive agent profile (paper's key innovation)
+        self.profile = AgentProfile.create_self_adaptive()
         
         # Simulation state
         self.portfolio: Optional[Portfolio] = None
@@ -91,10 +97,7 @@ class TradingSimulator:
         run_mode: str,
         future_record: Optional[float] = None,
     ) -> Optional[Dict[str, Any]]:
-        """Process one trading day.
-        
-        This is the core loop from the FinMEM paper, matching the
-        reference implementation's agent.step() method.
+        """Process one trading day — paper's core loop.
         
         Args:
             cur_date: Current trading date.
@@ -106,11 +109,11 @@ class TradingSimulator:
             future_record: Next-day price change (train mode only).
             
         Returns:
-            Reflection result dictionary (contains decision in test mode).
+            Reflection result dictionary.
         """
         symbol = self.portfolio.symbol if self.portfolio else "UNKNOWN"
         
-        # 1. Store filings in memory
+        # 1. Store filings in memory (mid and long layers)
         if filing_q:
             self.brain.add_memory_mid(
                 symbol=symbol, mem_date=cur_date, text=filing_q
@@ -120,13 +123,18 @@ class TradingSimulator:
                 symbol=symbol, mem_date=cur_date, text=filing_k
             )
         
-        # 2. Store news in short-term memory
+        # 2. Working Memory Op 1: Summarize news via LLM before storage
         if news:
-            for article in news:
-                if article.strip():
-                    self.brain.add_memory_short(
-                        symbol=symbol, mem_date=cur_date, text=article
-                    )
+            summarized = summarize_news(
+                llm=self.llm,
+                news_list=news,
+                symbol=symbol,
+                cur_date=cur_date,
+            )
+            if summarized:
+                self.brain.add_memory_short(
+                    symbol=symbol, mem_date=cur_date, text=summarized
+                )
         
         # 3. Update portfolio with current price
         self.portfolio.update_market_info(
@@ -134,18 +142,47 @@ class TradingSimulator:
             cur_date=cur_date,
         )
         
-        # 4. Run reflection (the core working memory operation)
+        # 4. Self-adaptive character: update risk mode based on 3-day return
+        moment_data = self.portfolio.get_moment(moment_window=3)
+        momentum_val = None
+        cum_3day_return = 0
+        if moment_data is not None:
+            momentum_val = moment_data["moment"]
+            # Compute actual 3-day cumulative return for character update
+            if len(self.portfolio.price_history) >= 4:
+                p_now = self.portfolio.price_history[-1]
+                p_3ago = self.portfolio.price_history[-4]
+                cum_3day_return = (p_now - p_3ago) / p_3ago if p_3ago > 0 else 0
+            self.profile.update_character(cum_3day_return)
+        
+        # 5. Working Memory Op 2: Observation — structured price analysis via LLM
+        observation = observe_price(
+            llm=self.llm,
+            symbol=symbol,
+            cur_date=cur_date,
+            cur_price=cur_price,
+            price_history=self.portfolio.price_history,
+            momentum=momentum_val,
+        )
+        if observation:
+            self.brain.add_memory_short(
+                symbol=symbol, mem_date=cur_date, text=observation
+            )
+        
+        # 5. Get dynamic character string for memory query
+        character_string = self.profile.get_character_string(symbol)
+        
+        # 7. Run reflection (core working memory operation 3)
         momentum = None
-        if run_mode == "test":
-            moment_data = self.portfolio.get_moment(moment_window=3)
-            momentum = moment_data["moment"] if moment_data else None
+        if run_mode == "test" and momentum_val is not None:
+            momentum = momentum_val
         
         reflection_result = trading_reflection(
             cur_date=cur_date,
             symbol=symbol,
             brain=self.brain,
             llm=self.llm,
-            character_string=self.config.profile.character_string,
+            character_string=character_string,
             top_k=self.config.memory.top_k,
             run_mode=run_mode,
             future_record=future_record,
@@ -154,13 +191,11 @@ class TradingSimulator:
         
         self.reflection_results[cur_date] = reflection_result
         
-        # 5. Construct and execute action
+        # 7. Construct and execute action (1 share per paper)
         if run_mode == "train":
-            # In train mode, action is derived from actual future record
             direction = 1 if (future_record and future_record > 0) else -1
             action = {"direction": direction}
         else:
-            # In test mode, action comes from reflection
             decision = reflection_result.get("investment_decision", "hold")
             if decision == "buy":
                 action = {"direction": 1}
@@ -169,14 +204,14 @@ class TradingSimulator:
             else:
                 action = {"direction": 0}
         
-        # 6. Execute the action
+        # 8. Execute the action
         self.portfolio.record_action(action)
         self.portfolio.update_portfolio_series()
         
-        # 7. Update access counters based on portfolio feedback
+        # 9. Update access counters based on portfolio feedback
         self._update_access_counters()
         
-        # 8. Memory system step (decay, cleanup, jumps)
+        # 10. Memory system step (decay, cleanup, jumps)
         self.brain.step()
         
         self.day_counter += 1
@@ -185,6 +220,7 @@ class TradingSimulator:
             f"[Day {self.day_counter}] {cur_date} | "
             f"Price: ${cur_price:.2f} | "
             f"Action: {action.get('direction', 0)} | "
+            f"Character: {self.profile.current_risk_mode} | "
             f"Portfolio: {self.portfolio.get_summary()}"
         )
         
@@ -203,7 +239,6 @@ class TradingSimulator:
         reflection = self.reflection_results[feedback_date]
         all_ids = reflection.get("_all_memory_ids", {})
         
-        # Gather all memory IDs that influenced the decision
         all_mem_ids = []
         for layer in ["short", "mid", "long", "reflection"]:
             all_mem_ids.extend(all_ids.get(layer, []))
@@ -233,18 +268,19 @@ class TradingSimulator:
             end_date: Simulation end date.
             mode: "train" or "test".
             initial_capital: Starting cash.
-            dataset_path: Path to pre-built dataset. Builds one if not provided.
+            dataset_path: Path to pre-built dataset.
             verbose: Print progress.
             
         Returns:
-            SimulationResult with trades, P&L, and memory stats.
+            SimulationResult with trades, metrics, and memory stats.
         """
         if verbose:
             print(f"\n{'='*60}")
-            print(f"  FinMEM Trading Simulation")
+            print(f"  FinMEM Trading Simulation (Paper-Faithful)")
             print(f"  Ticker: {ticker} | Mode: {mode}")
             print(f"  Period: {start_date} → {end_date}")
             print(f"  Capital: ${initial_capital:,.2f}")
+            print(f"  Character: Self-Adaptive (paper default)")
             print(f"{'='*60}\n")
         
         # Load or build dataset
@@ -284,6 +320,10 @@ class TradingSimulator:
         # Reset state
         self.reflection_results = {}
         self.day_counter = 0
+        self.profile = AgentProfile.create_self_adaptive()
+        
+        # Collect prices for B&H baseline
+        prices_for_bh = []
         
         if verbose:
             print(f"\n  Starting {mode} simulation ({env.simulation_length} days)...\n")
@@ -296,9 +336,12 @@ class TradingSimulator:
             if terminated:
                 break
             
+            prices_for_bh.append(cur_price)
+            
             if verbose and self.day_counter % 5 == 0:
                 print(f"  Day {self.day_counter + 1}: {cur_date} | "
                       f"${cur_price:.2f} | "
+                      f"[{self.profile.current_risk_mode}] | "
                       f"{self.portfolio.get_summary()}")
             
             self.step(
@@ -316,6 +359,10 @@ class TradingSimulator:
         total_return = final_value - initial_capital
         total_return_pct = (total_return / initial_capital) * 100
         
+        # Compute paper's 5 evaluation metrics
+        agent_metrics = compute_metrics(self.portfolio.portfolio_value_history)
+        bh_metrics = compute_buy_and_hold(prices_for_bh, initial_capital)
+        
         result = SimulationResult(
             ticker=ticker,
             mode=mode,
@@ -329,6 +376,8 @@ class TradingSimulator:
             trades=self.portfolio.action_history,
             reflection_results=self.reflection_results,
             memory_stats=self.brain.stats(ticker),
+            metrics=agent_metrics,
+            bh_metrics=bh_metrics,
         )
         
         if verbose:
@@ -337,7 +386,10 @@ class TradingSimulator:
             print(f"  Days Processed: {self.day_counter}")
             print(f"  Final Value:    ${final_value:,.2f}")
             print(f"  Total Return:   ${total_return:,.2f} ({total_return_pct:+.2f}%)")
-            print(f"  Memory Stats:   {self.brain.stats(ticker)}")
+            print(f"\n  📊 Evaluation Metrics (Paper's 5 Metrics):")
+            print(f"  {'─'*50}")
+            print(format_metrics_report(agent_metrics, bh_metrics, ticker))
+            print(f"\n  Memory Stats:   {self.brain.stats(ticker)}")
             print(f"{'='*60}\n")
         
         return result
@@ -348,13 +400,12 @@ class TradingSimulator:
         """Save full agent state for resume."""
         os.makedirs(path, exist_ok=True)
         
-        # Save brain
         self.brain.save_checkpoint(os.path.join(path, "brain"))
         
-        # Save agent state
         state = {
             "config": self.config,
             "portfolio": self.portfolio,
+            "profile": self.profile,
             "reflection_results": self.reflection_results,
             "day_counter": self.day_counter,
         }
@@ -373,6 +424,7 @@ class TradingSimulator:
         
         agent = cls(config=state["config"], brain=brain)
         agent.portfolio = state["portfolio"]
+        agent.profile = state.get("profile", AgentProfile.create_self_adaptive())
         agent.reflection_results = state["reflection_results"]
         agent.day_counter = state["day_counter"]
         

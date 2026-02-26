@@ -33,6 +33,20 @@ from .memory_functions import (
 
 logger = logging.getLogger(__name__)
 
+FAISS_AVAILABLE = False
+
+if os.environ.get("FINMEM_USE_FAISS", "").strip() == "1":
+    try:
+        import faiss
+        FAISS_AVAILABLE = True
+        logger.info("FAISS backend enabled via FINMEM_USE_FAISS=1")
+    except ImportError:
+        logger.info("FAISS requested but not installed (pip install faiss-cpu)")
+else:
+    # Don't import faiss when disabled — on some platforms (Python 3.13 + ARM),
+    # the faiss native library conflicts with sentence-transformers and segfaults.
+    logger.info("Using NumPy backend for similarity search (set FINMEM_USE_FAISS=1 to use FAISS)")
+
 
 class MemoryLayer(Enum):
     """Memory layer types."""
@@ -102,10 +116,17 @@ class MemoryDB:
     def _ensure_symbol(self, symbol: str) -> None:
         """Create storage for a symbol if it doesn't exist."""
         if symbol not in self.universe:
+            faiss_index = None
+            if FAISS_AVAILABLE:
+                try:
+                    faiss_index = faiss.IndexFlatIP(self.emb_dim)
+                except Exception:
+                    pass
             self.universe[symbol] = {
                 "score_memory": [],
                 "embeddings": np.empty((0, self.emb_dim), dtype=np.float32),
                 "ids": [],
+                "faiss_index": faiss_index,
             }
 
     def add_memory(
@@ -165,6 +186,14 @@ class MemoryDB:
             )
             self.universe[symbol]["ids"].append(mem_id)
             ids.append(mem_id)
+            
+            # Add to FAISS index
+            fidx = self.universe[symbol].get("faiss_index")
+            if fidx is not None:
+                try:
+                    fidx.add(emb)
+                except Exception:
+                    pass
 
         return ids
 
@@ -174,11 +203,12 @@ class MemoryDB:
         top_k: int,
         symbol: str,
     ) -> Tuple[List[str], List[int]]:
-        """Query memories by combining similarity + compound score.
+        """Query memories using FAISS + compound score (paper's approach).
         
-        Two-phase search (matching reference implementation):
-        1. Find top-k by cosine similarity, merge with compound scores
-        2. Find top-k by compound score, get their similarity
+        Paper: Uses FAISS for vector similarity search.
+        Two-phase retrieval:
+        1. FAISS top-k by cosine similarity, merge with compound scores
+        2. Top-k by compound score, get their similarity
         3. Rank all candidates by merged score, return unique top-k
         
         Args:
@@ -208,16 +238,34 @@ class MemoryDB:
         if q_norm > 0:
             query_emb = query_emb / q_norm
 
-        # Phase 1: top-k by cosine similarity
-        similarities = (all_embeddings @ query_emb.T).flatten()
-        p1_indices = np.argsort(similarities)[::-1][:top_k]
+        # Phase 1: top-k by similarity (FAISS or NumPy fallback)
+        faiss_index = self.universe[symbol].get("faiss_index")
+        use_faiss = False
+        if FAISS_AVAILABLE and faiss_index is not None and faiss_index.ntotal > 0:
+            try:
+                scores, indices = faiss_index.search(query_emb, top_k)
+                p1_indices = indices[0]
+                # Build full similarity array for merge phase
+                all_scores, all_indices = faiss_index.search(query_emb, n)
+                similarities = np.zeros(n, dtype=np.float32)
+                for idx_pos, idx_val in enumerate(all_indices[0]):
+                    if 0 <= idx_val < n:
+                        similarities[idx_val] = all_scores[0][idx_pos]
+                use_faiss = True
+            except Exception:
+                pass
+
+        if not use_faiss:
+            # NumPy fallback
+            similarities = (all_embeddings @ query_emb.T).flatten()
+            p1_indices = np.argsort(similarities)[::-1][:top_k]
 
         # Phase 2: top-k by compound score
         compound_scores = [r["compound_score"] for r in records]
         p2_indices = np.argsort(compound_scores)[::-1][:top_k]
 
         # Merge candidates
-        candidate_set = set(p1_indices.tolist()) | set(p2_indices.tolist())
+        candidate_set = set(int(i) for i in p1_indices if 0 <= i < n) | set(p2_indices.tolist())
         
         candidates = []
         for idx in candidate_set:
@@ -334,8 +382,20 @@ class MemoryDB:
                 else:
                     self.universe[symbol]["embeddings"] = np.empty((0, self.emb_dim), dtype=np.float32)
                 self.universe[symbol]["ids"] = [ids_list[i] for i in keep_indices]
+                # Rebuild FAISS index after removals
+                self._rebuild_faiss_index(symbol)
 
         return removed_ids
+
+    def _rebuild_faiss_index(self, symbol: str) -> None:
+        """Rebuild the FAISS index for a symbol from current embeddings."""
+        if not FAISS_AVAILABLE or symbol not in self.universe:
+            return
+        new_index = faiss.IndexFlatIP(self.emb_dim)
+        embs = self.universe[symbol]["embeddings"]
+        if embs.shape[0] > 0:
+            new_index.add(embs.astype(np.float32))
+        self.universe[symbol]["faiss_index"] = new_index
 
     def step(self) -> List[int]:
         """One time step: decay then clean up.
@@ -399,6 +459,8 @@ class MemoryDB:
                 else:
                     self.universe[symbol]["embeddings"] = np.empty((0, self.emb_dim), dtype=np.float32)
                 self.universe[symbol]["ids"] = [ids_list[i] for i in keep]
+                # Rebuild FAISS index after removals
+                self._rebuild_faiss_index(symbol)
 
         return jump_up, jump_down, removed_ids
 
@@ -433,6 +495,8 @@ class MemoryDB:
             self.universe[symbol]["embeddings"] = np.vstack(
                 [self.universe[symbol]["embeddings"], embs.astype(np.float32)]
             )
+            # Rebuild FAISS index after accepting new memories
+            self._rebuild_faiss_index(symbol)
 
     def get_memory_count(self, symbol: str) -> int:
         """Get number of memories for a symbol."""
@@ -584,31 +648,36 @@ class BrainDB:
 
     @classmethod
     def create_default(cls) -> "BrainDB":
-        """Create a BrainDB with sensible defaults."""
+        """Create a BrainDB with paper-faithful defaults.
+        
+        Paper values:
+            Q_shallow=14, Q_intermediate=90, Q_deep=365
+            α_shallow=0.9, α_intermediate=0.967, α_deep=0.988
+        """
         return cls.from_config({
             "agent_name": "finmem_agent",
             "short": {
                 "jump_threshold_upper": 0.8,
-                "jump_threshold_lower": -999999,  # No demotion from short
-                "decay_params": {"decay_rate": 0.99},
+                "jump_threshold_lower": -999999,
+                "decay_params": {"decay_rate": 14.0, "importance_base": 0.9},
                 "clean_up_threshold_dict": {"recency_threshold": 0.01, "importance_threshold": 0.01},
             },
             "mid": {
                 "jump_threshold_upper": 0.85,
                 "jump_threshold_lower": 0.1,
-                "decay_params": {"decay_rate": 0.5},
+                "decay_params": {"decay_rate": 90.0, "importance_base": 0.967},
                 "clean_up_threshold_dict": {"recency_threshold": 0.01, "importance_threshold": 0.01},
             },
             "long": {
-                "jump_threshold_upper": 999999,  # No promotion from long
+                "jump_threshold_upper": 999999,
                 "jump_threshold_lower": 0.15,
-                "decay_params": {"decay_rate": 0.1},
+                "decay_params": {"decay_rate": 365.0, "importance_base": 0.988},
                 "clean_up_threshold_dict": {"recency_threshold": 0.005, "importance_threshold": 0.005},
             },
             "reflection": {
-                "jump_threshold_upper": 999999,  # No promotion
-                "jump_threshold_lower": -999999,  # No demotion
-                "decay_params": {"decay_rate": 0.3},
+                "jump_threshold_upper": 999999,
+                "jump_threshold_lower": -999999,
+                "decay_params": {"decay_rate": 365.0, "importance_base": 0.988},
                 "clean_up_threshold_dict": {"recency_threshold": 0.005, "importance_threshold": 0.005},
             },
         })
@@ -755,6 +824,49 @@ class BrainDB:
             self.removed_ids.extend(deleted)
             if down:
                 self.mid_term_memory.accept_jump(down, "down")
+
+    # ── Promotion bonus (paper: Guardrails AI equivalent) ──
+
+    def boost_importance(
+        self,
+        symbol: str,
+        mem_id: int,
+        bonus: float = 0.05,
+    ) -> bool:
+        """Boost importance score for a specific memory.
+        
+        Paper: Guardrails AI identifies pivotal memories and gives +5 bonus.
+        We normalize to [0,1] scale, so +5 on a 0-100 scale ≈ +0.05 on 0-1.
+        
+        Args:
+            symbol: Stock ticker.
+            mem_id: Memory ID to boost.
+            bonus: Importance bonus (default 0.05 ≈ paper's +5 on 0-100 scale).
+            
+        Returns:
+            True if the memory was found and boosted.
+        """
+        if mem_id in self.removed_ids:
+            return False
+
+        for layer in [self.short_term_memory, self.mid_term_memory,
+                      self.long_term_memory, self.reflection_memory]:
+            if symbol not in layer.universe:
+                continue
+            for record in layer.universe[symbol]["score_memory"]:
+                if record["id"] == mem_id:
+                    record["important_score"] = min(
+                        1.0, record["important_score"] + bonus
+                    )
+                    record["compound_score"] = (
+                        layer.compound_score_calc.recency_and_importance_score(
+                            recency_score=record["recency_score"],
+                            importance_score=record["important_score"],
+                        )
+                    )
+                    logger.info(f"Boosted memory {mem_id} importance by {bonus}")
+                    return True
+        return False
 
     # ── Stats ──
 

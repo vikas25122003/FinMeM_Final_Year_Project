@@ -85,10 +85,10 @@ class Portfolio:
         }
         
         if direction == 1:  # Buy
-            # Invest 20% of cash
-            invest_amount = self.cash * 0.2
-            if invest_amount > 100 and self.current_price > 0:
-                new_shares = invest_amount / self.current_price
+            # Paper: trade exactly 1 share per decision
+            new_shares = 1.0
+            invest_amount = self.current_price * new_shares
+            if invest_amount <= self.cash and self.current_price > 0:
                 self.cash -= invest_amount
                 
                 # Average into position
@@ -108,20 +108,24 @@ class Portfolio:
                 trade_record["shares_traded"] = 0
 
         elif direction == -1:  # Sell
-            if self.shares > 0:
-                sell_value = self.shares * self.current_price
-                pnl = sell_value - (self.shares * self.entry_price)
+            # Paper: sell 1 share at a time
+            if self.shares >= 1.0:
+                shares_to_sell = 1.0
+                sell_value = shares_to_sell * self.current_price
+                pnl = sell_value - (shares_to_sell * self.entry_price)
                 
                 trade_record["action"] = "SELL"
-                trade_record["shares_traded"] = self.shares
+                trade_record["shares_traded"] = shares_to_sell
                 trade_record["amount"] = sell_value
                 trade_record["pnl"] = pnl
                 
                 self.cash += sell_value
-                self.shares = 0.0
-                self.entry_price = 0.0
+                self.shares -= shares_to_sell
+                if self.shares < 0.001:  # Float cleanup
+                    self.shares = 0.0
+                    self.entry_price = 0.0
             else:
-                trade_record["action"] = "HOLD"  # No position to sell
+                trade_record["action"] = "HOLD"  # No shares to sell
                 trade_record["shares_traded"] = 0
 
         else:  # Hold

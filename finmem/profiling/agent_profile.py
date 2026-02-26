@@ -1,8 +1,10 @@
 """
-Agent Profiling Module
+Agent Profiling Module — Paper-Faithful Implementation
 
-Defines the agent's personality, risk tolerance, and trading style.
-Based on the Profiling module from the FinMEM paper.
+Based on the FinMEM paper's Profiling module:
+- Three character modes: risk_seeking, risk_averse, self_adaptive
+- Self-adaptive: switches risk mode based on 3-day cumulative return
+- Dynamic character string: professional background + risk mode + ticker context
 """
 
 from dataclasses import dataclass, field
@@ -12,108 +14,183 @@ from enum import Enum
 from ..config import ProfileConfig, DEFAULT_CONFIG
 
 
-class RiskLevel(Enum):
-    """Risk tolerance levels."""
-    CONSERVATIVE = 0.3
-    MODERATE = 0.5
-    AGGRESSIVE = 0.7
+class RiskMode(Enum):
+    """Paper's three risk character modes."""
+    RISK_SEEKING = "risk_seeking"
+    RISK_AVERSE = "risk_averse"
+    SELF_ADAPTIVE = "self_adaptive"
 
 
 class TradingStyle(Enum):
     """Trading styles."""
-    VALUE = "value"           # Focus on undervalued stocks
-    GROWTH = "growth"         # Focus on high-growth potential
-    MOMENTUM = "momentum"     # Follow market trends
-    BALANCED = "balanced"     # Mix of strategies
+    VALUE = "value"
+    GROWTH = "growth"
+    MOMENTUM = "momentum"
+    BALANCED = "balanced"
 
 
 @dataclass
 class AgentProfile:
-    """
-    Agent profile defining personality and trading behavior.
+    """FinMEM Agent Profile with self-adaptive character setting.
     
-    Based on the FinMEM paper's Profiling module which customizes
-    the agent's characteristics for improved decision diversity.
+    Paper: The agent alternates between risk-seeking and risk-averse
+    based on the 3-day cumulative return. When return < 0, it switches
+    to risk-averse. When return >= 0, it switches to risk-seeking.
     """
     
     name: str = "FinMEM Agent"
-    risk_level: RiskLevel = RiskLevel.MODERATE
+    mode: RiskMode = RiskMode.SELF_ADAPTIVE
     trading_style: TradingStyle = TradingStyle.BALANCED
     
-    # Dynamic risk adjustment based on market conditions
-    adaptive_risk: bool = True
+    # Internal state for self-adaptive mode
+    current_risk_mode: str = "risk_seeking"  # Tracks current active mode
     
-    # Personality traits for prompts
+    # Personality traits
     traits: dict = field(default_factory=lambda: {
         "analytical": True,
         "patient": True,
-        "disciplined": True
+        "disciplined": True,
     })
-    
-    def __post_init__(self):
-        """Initialize from config if values are default."""
-        pass
     
     @classmethod
     def from_config(cls, config: Optional[ProfileConfig] = None) -> "AgentProfile":
-        """Create an AgentProfile from configuration.
-        
-        Args:
-            config: Profile configuration. Uses default if not provided.
-            
-        Returns:
-            Configured AgentProfile instance.
-        """
+        """Create an AgentProfile from configuration."""
         config = config or DEFAULT_CONFIG.profile
         
-        # Map risk tolerance to risk level
+        # Map risk tolerance to mode
         if config.risk_tolerance <= 0.35:
-            risk_level = RiskLevel.CONSERVATIVE
-        elif config.risk_tolerance <= 0.6:
-            risk_level = RiskLevel.MODERATE
+            mode = RiskMode.RISK_AVERSE
+        elif config.risk_tolerance >= 0.65:
+            mode = RiskMode.RISK_SEEKING
         else:
-            risk_level = RiskLevel.AGGRESSIVE
-            
-        # Map trading style
+            mode = RiskMode.SELF_ADAPTIVE
+        
         style_map = {
             "value": TradingStyle.VALUE,
             "growth": TradingStyle.GROWTH,
             "momentum": TradingStyle.MOMENTUM,
-            "balanced": TradingStyle.BALANCED
+            "balanced": TradingStyle.BALANCED,
         }
         trading_style = style_map.get(config.trading_style, TradingStyle.BALANCED)
         
+        initial = "risk_seeking" if mode == RiskMode.RISK_SEEKING else (
+            "risk_averse" if mode == RiskMode.RISK_AVERSE else "risk_seeking"
+        )
+        
         return cls(
-            risk_level=risk_level,
-            trading_style=trading_style
+            mode=mode,
+            trading_style=trading_style,
+            current_risk_mode=initial,
+        )
+    
+    @classmethod
+    def create_self_adaptive(cls) -> "AgentProfile":
+        """Create a self-adaptive profile (paper's recommended mode)."""
+        return cls(
+            name="FinMEM Self-Adaptive Agent",
+            mode=RiskMode.SELF_ADAPTIVE,
+            trading_style=TradingStyle.BALANCED,
+            current_risk_mode="risk_seeking",
+        )
+    
+    def update_character(self, cumulative_3day_return: float) -> None:
+        """Update character mode based on 3-day cumulative return.
+        
+        Paper algorithm:
+            If cumulative return of past 3 days < 0:
+                Switch to risk_averse
+            If cumulative return of past 3 days >= 0:
+                Switch to risk_seeking
+        
+        Only applies in SELF_ADAPTIVE mode.
+        
+        Args:
+            cumulative_3day_return: The sum of returns over the past 3 days.
+        """
+        if self.mode != RiskMode.SELF_ADAPTIVE:
+            return
+        
+        previous = self.current_risk_mode
+        if cumulative_3day_return < 0:
+            self.current_risk_mode = "risk_averse"
+        else:
+            self.current_risk_mode = "risk_seeking"
+        
+        if previous != self.current_risk_mode:
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.info(
+                f"Character switched: {previous} → {self.current_risk_mode} "
+                f"(3-day return: {cumulative_3day_return:+.4f})"
+            )
+    
+    def get_character_string(self, symbol: str) -> str:
+        """Generate dynamic character string for memory retrieval query.
+        
+        Paper: Character = Professional Background + Risk Inclination + Ticker context.
+        This string is used as the retrieval query for all 4 memory layers.
+        
+        Args:
+            symbol: Stock ticker being analyzed.
+            
+        Returns:
+            Character string for memory querying.
+        """
+        if self.current_risk_mode == "risk_seeking":
+            risk_desc = (
+                "You are a risk-seeking trader who actively pursues high-return "
+                "opportunities. You are willing to accept higher volatility and "
+                "potential losses in pursuit of significant gains."
+            )
+        else:
+            risk_desc = (
+                "You are a risk-averse trader who prioritizes capital preservation. "
+                "You prefer stable, lower-risk investments and are cautious about "
+                "entering volatile positions."
+            )
+        
+        return (
+            f"A professional financial analyst specializing in stock trading, "
+            f"currently analyzing {symbol}. "
+            f"Expert in analyzing market trends, financial statements, and news sentiment. "
+            f"{risk_desc}"
         )
     
     def get_system_prompt(self) -> str:
-        """Generate a system prompt based on the agent's profile.
-        
-        Returns:
-            System prompt string for LLM context.
-        """
+        """Generate a system prompt based on the agent's profile."""
         risk_descriptions = {
-            RiskLevel.CONSERVATIVE: "conservative and risk-averse",
-            RiskLevel.MODERATE: "balanced and measured",
-            RiskLevel.AGGRESSIVE: "aggressive and growth-focused"
+            "risk_seeking": "aggressive and growth-focused, willing to take calculated risks",
+            "risk_averse": "conservative and risk-averse, prioritizing capital preservation",
         }
         
         style_descriptions = {
             TradingStyle.VALUE: "identifying undervalued companies with strong fundamentals",
             TradingStyle.GROWTH: "finding high-growth potential stocks",
             TradingStyle.MOMENTUM: "following market trends and momentum signals",
-            TradingStyle.BALANCED: "a balanced approach combining multiple strategies"
+            TradingStyle.BALANCED: "a balanced approach combining multiple strategies",
         }
+        
+        risk_text = risk_descriptions.get(
+            self.current_risk_mode, "balanced and measured"
+        )
+        style_text = style_descriptions.get(
+            self.trading_style, "a balanced approach"
+        )
+        
+        adaptive_note = ""
+        if self.mode == RiskMode.SELF_ADAPTIVE:
+            adaptive_note = (
+                "\n\n**Note**: Your risk profile adapts dynamically based on recent "
+                "market performance. Currently in {} mode.".format(self.current_risk_mode)
+            )
         
         return f"""You are {self.name}, a professional financial analyst and trader.
 
 ## Your Trading Profile
 
-**Risk Approach**: You are {risk_descriptions[self.risk_level]} in your investment decisions.
+**Risk Approach**: You are {risk_text} in your investment decisions.{adaptive_note}
 
-**Trading Strategy**: You specialize in {style_descriptions[self.trading_style]}.
+**Trading Strategy**: You specialize in {style_text}.
 
 ## Your Responsibilities
 
@@ -122,63 +199,31 @@ class AgentProfile:
 3. Make well-reasoned trading recommendations (BUY, HOLD, or SELL)
 4. Always explain your reasoning clearly
 5. Account for risk management in every decision
-
-## Your Traits
-
-- Analytical: You rely on data and evidence
-- Patient: You don't rush into decisions
-- Disciplined: You follow your strategy consistently
 """
     
-    def adjust_risk_for_volatility(self, volatility: float) -> float:
-        """Adjust risk tolerance based on market volatility.
-        
-        Args:
-            volatility: Current market volatility (0-1 scale).
-            
-        Returns:
-            Adjusted risk tolerance value.
-        """
-        if not self.adaptive_risk:
-            return self.risk_level.value
-        
-        # Reduce risk tolerance in high volatility
-        base_risk = self.risk_level.value
-        if volatility > 0.7:
-            return max(0.2, base_risk - 0.2)
-        elif volatility > 0.5:
-            return max(0.3, base_risk - 0.1)
-        else:
-            return base_risk
-    
     def get_position_size_factor(self) -> float:
-        """Get position sizing factor based on risk profile.
-        
-        Returns:
-            Multiplier for position sizing (0.5 to 1.5).
-        """
-        return {
-            RiskLevel.CONSERVATIVE: 0.6,
-            RiskLevel.MODERATE: 1.0,
-            RiskLevel.AGGRESSIVE: 1.4
-        }[self.risk_level]
+        """Get position sizing factor based on current risk mode."""
+        if self.current_risk_mode == "risk_seeking":
+            return 1.4
+        else:
+            return 0.6
 
 
 # Pre-configured profiles
-CONSERVATIVE_PROFILE = AgentProfile(
-    name="Conservative Trader",
-    risk_level=RiskLevel.CONSERVATIVE,
-    trading_style=TradingStyle.VALUE
+RISK_SEEKING_PROFILE = AgentProfile(
+    name="Risk-Seeking Trader",
+    mode=RiskMode.RISK_SEEKING,
+    current_risk_mode="risk_seeking",
 )
 
-MODERATE_PROFILE = AgentProfile(
-    name="Balanced Trader",
-    risk_level=RiskLevel.MODERATE,
-    trading_style=TradingStyle.BALANCED
+RISK_AVERSE_PROFILE = AgentProfile(
+    name="Risk-Averse Trader",
+    mode=RiskMode.RISK_AVERSE,
+    current_risk_mode="risk_averse",
 )
 
-AGGRESSIVE_PROFILE = AgentProfile(
-    name="Growth Trader",
-    risk_level=RiskLevel.AGGRESSIVE,
-    trading_style=TradingStyle.GROWTH
+SELF_ADAPTIVE_PROFILE = AgentProfile(
+    name="Self-Adaptive Trader",
+    mode=RiskMode.SELF_ADAPTIVE,
+    current_risk_mode="risk_seeking",
 )

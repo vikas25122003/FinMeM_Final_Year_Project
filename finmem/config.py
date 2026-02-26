@@ -36,18 +36,18 @@ class MemoryLayerConfig:
     jump_threshold_upper: float = 999999.0  # No promotion by default
     jump_threshold_lower: float = -999999.0  # No demotion by default
     decay_params: Dict[str, float] = field(default_factory=lambda: {
-        "decay_rate": 0.5,
-        "importance_decay_rate": 0.0,
+        "decay_rate": 14.0,       # Q_l: stability term in days (paper default)
+        "importance_base": 0.9,   # α_l: importance decay base
     })
     clean_up_threshold_dict: Dict[str, float] = field(default_factory=lambda: {
         "recency_threshold": 0.01,
         "importance_threshold": 0.01,
     })
     compound_score_params: Dict[str, float] = field(default_factory=lambda: {
-        "w_recency": 0.5,
-        "w_importance": 0.5,
-        "w_similarity": 0.5,
-        "w_compound": 0.5,
+        "w_recency": 1.0,
+        "w_importance": 1.0,
+        "w_similarity": 1.0,
+        "w_compound": 1.0,
     })
 
 
@@ -56,28 +56,30 @@ class MemoryConfig:
     """Layered memory configuration based on the paper."""
     
     # Per-layer configs
+    # Paper: Q_shallow=14, Q_intermediate=90, Q_deep=365
+    # Paper: α_shallow=0.9, α_intermediate=0.967, α_deep=0.988
     short: MemoryLayerConfig = field(default_factory=lambda: MemoryLayerConfig(
         jump_threshold_upper=0.8,
         jump_threshold_lower=-999999.0,  # No demotion from short
-        decay_params={"decay_rate": 0.99, "importance_decay_rate": 0.0},
+        decay_params={"decay_rate": 14.0, "importance_base": 0.9},
         clean_up_threshold_dict={"recency_threshold": 0.01, "importance_threshold": 0.01},
     ))
     mid: MemoryLayerConfig = field(default_factory=lambda: MemoryLayerConfig(
         jump_threshold_upper=0.85,
         jump_threshold_lower=0.1,
-        decay_params={"decay_rate": 0.5, "importance_decay_rate": 0.0},
+        decay_params={"decay_rate": 90.0, "importance_base": 0.967},
         clean_up_threshold_dict={"recency_threshold": 0.01, "importance_threshold": 0.01},
     ))
     long: MemoryLayerConfig = field(default_factory=lambda: MemoryLayerConfig(
         jump_threshold_upper=999999.0,  # No promotion from long
         jump_threshold_lower=0.15,
-        decay_params={"decay_rate": 0.1, "importance_decay_rate": 0.0},
+        decay_params={"decay_rate": 365.0, "importance_base": 0.988},
         clean_up_threshold_dict={"recency_threshold": 0.005, "importance_threshold": 0.005},
     ))
     reflection: MemoryLayerConfig = field(default_factory=lambda: MemoryLayerConfig(
         jump_threshold_upper=999999.0,
         jump_threshold_lower=-999999.0,
-        decay_params={"decay_rate": 0.3, "importance_decay_rate": 0.0},
+        decay_params={"decay_rate": 365.0, "importance_base": 0.988},
         clean_up_threshold_dict={"recency_threshold": 0.005, "importance_threshold": 0.005},
     ))
     
