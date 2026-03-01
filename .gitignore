@@ -95,3 +95,10 @@ logs/
 # Results and checkpoints (optional - remove if you want to track)
 # results/
 # checkpoints/
+
+# ── Custom FinMEM Ignores ──
+Reference_Papers/
+artifacts/
+data/datasets/
+models/
+docs/build/

@@ -12,6 +12,9 @@ torch>=2.0.0
 # Vector database (paper's FAISS backend)
 faiss-cpu>=1.7.4
 
+# AWS Bedrock (alternative LLM provider)
+boto3>=1.28.0
+
 # News parsing
 feedparser>=6.0.10
 beautifulsoup4>=4.12.0
