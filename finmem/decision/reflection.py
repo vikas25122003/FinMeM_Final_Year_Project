@@ -282,6 +282,7 @@ def trading_reflection(
     run_mode: str,
     future_record: Optional[float] = None,
     momentum: Optional[int] = None,
+    portfolio_state: Optional[Dict[str, float]] = None,
 ) -> Dict[str, Any]:
     """Perform a reflection step — the core working memory operation.
 
@@ -327,8 +328,14 @@ def trading_reflection(
         investment_info += memory_text
         prompt = train_prompt.format(investment_info=investment_info)
     else:
+        # Include portfolio state so LLM knows current holdings
+        ps = portfolio_state or {"cash": 100000.0, "shares": 0.0,
+                                  "position_value": 0.0, "total_value": 100000.0}
         investment_info = test_investment_info_prefix.format(
-            cur_date=cur_date, symbol=symbol
+            cur_date=cur_date, symbol=symbol,
+            cash=ps["cash"], shares=ps["shares"],
+            position_value=ps["position_value"],
+            total_value=ps["total_value"],
         )
         investment_info += memory_text
 

@@ -7,12 +7,20 @@ Based on the FinMEM paper's memory scoring mechanisms:
 - Recency score with exponential decay: S_Recency = e^(-δ / Q_l)
 - Importance decay: S_Importance = v * α_l^δ
 - Compound score: γ = S_Recency + S_Relevancy + S_Importance (additive sum)
+
+Objective 1 Extension:
+- AdaptiveExponentialDecay: Replaces fixed Q_l with regime-conditioned Q_l(regime)
+  Enable by setting env var  ADAPTIVE_Q=true
 """
 
 import math
+import os
 import random
+import logging
 from dataclasses import dataclass, field
-from typing import Tuple, List
+from typing import Optional, Tuple, List
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -43,7 +51,8 @@ class ExponentialDecay:
     def __call__(
         self,
         important_score: float,
-        delta: int
+        delta: int,
+        **kwargs,   # absorbs ticker/current_date passed by AdaptiveExponentialDecay callers
     ) -> Tuple[float, float, int]:
         """Apply decay and return new (recency, importance, delta).
         
@@ -212,3 +221,117 @@ class LinearImportanceScoreChange:
             new_score = importance_score
         
         return max(self.min_score, min(self.max_score, new_score))
+
+
+# ─── Objective 1: Regime-Conditioned Adaptive Decay ────────────────────────
+
+@dataclass
+class AdaptiveExponentialDecay:
+    """
+    Regime-conditioned drop-in replacement for ExponentialDecay.
+
+    Objective 1 of Agentic FinMEM.
+
+    Behaviour:
+        ADAPTIVE_Q=false (or unset):
+            → Identical to ExponentialDecay (paper defaults, no network calls)
+        ADAPTIVE_Q=true:
+            → Calls yfinance to detect market regime (CRISIS/SIDEWAYS/BULL)
+            → Uses Q from Q_TABLE[regime][layer] instead of the fixed decay_rate
+            → Falls back to fixed decay_rate on ANY exception (network, data, etc.)
+
+    Args:
+        layer_name:       Memory layer name — "short" | "mid" | "long" | "reflection"
+        decay_rate:       Paper's original Q for this layer (14 / 90 / 365)
+        importance_base:  Paper's α for importance decay (0.9 / 0.967 / 0.988)
+
+    Usage in BrainDB.create_default():
+        decay_function = AdaptiveExponentialDecay(
+            layer_name="short", decay_rate=14.0, importance_base=0.9
+        )
+        # Pass ticker + current_date when calling:
+        new_recency, new_importance, new_delta = decay_function(
+            important_score=0.6, delta=0,
+            ticker="TSLA", current_date="2022-10-25"
+        )
+    """
+
+    layer_name:      str   = "short"
+    decay_rate:      float = 14.0   # Paper default Q — used as fallback
+    importance_base: float = 0.9    # Paper default α
+
+    # Runtime state (not serialised as part of the config, set per-call)
+    _current_ticker: Optional[str] = field(default=None, init=False, repr=False, compare=False)
+    _current_date:   Optional[str] = field(default=None, init=False, repr=False, compare=False)
+
+    def _is_adaptive_enabled(self) -> bool:
+        """Check ADAPTIVE_Q env var (true/1/yes → enabled)."""
+        val = os.environ.get("ADAPTIVE_Q", "false").strip().lower()
+        return val in ("true", "1", "yes")
+
+    def _get_adaptive_Q(self, ticker: str, date_str: str) -> float:
+        """
+        Compute regime-conditioned Q for the current layer.
+
+        Imports are done lazily (only when ADAPTIVE_Q=true) so that
+        the base FinMEM system never imports yfinance on startup.
+
+        Returns:
+            Q float. Falls back to self.decay_rate on any error.
+        """
+        try:
+            from agentic.obj1_regime.features   import compute_features
+            from agentic.obj1_regime.classifier import get_classifier
+            from agentic.obj1_regime.q_table    import get_Q
+
+            features = compute_features(ticker, date_str)
+            regime   = get_classifier(mode="threshold").predict(features)
+            q_val    = float(get_Q(regime, self.layer_name))
+
+            logger.debug(
+                f"[AdaptiveQ] layer={self.layer_name} ticker={ticker} "
+                f"date={date_str} regime={regime} Q={q_val}"
+            )
+            return q_val
+
+        except Exception as exc:
+            logger.debug(
+                f"[AdaptiveQ] Falling back to default Q={self.decay_rate} "
+                f"for layer={self.layer_name}: {exc}"
+            )
+            return self.decay_rate
+
+    def __call__(
+        self,
+        important_score: float,
+        delta: int,
+        ticker: Optional[str] = None,
+        current_date: Optional[str] = None,
+    ) -> Tuple[float, float, int]:
+        """
+        Apply adaptive (or fixed) exponential decay.
+
+        Args:
+            important_score: Current importance score.
+            delta:           Days since memory creation/promotion.
+            ticker:          Stock ticker for regime detection (optional).
+            current_date:    Date string YYYY-MM-DD for regime detection (optional).
+
+        Returns:
+            Tuple (new_recency, new_importance, new_delta).
+        """
+        new_delta = delta + 1
+
+        # Determine Q value
+        if (
+            self._is_adaptive_enabled()
+            and ticker
+            and current_date
+        ):
+            q = self._get_adaptive_Q(ticker, current_date)
+        else:
+            q = self.decay_rate
+
+        new_recency    = math.exp(-new_delta / q)
+        new_importance = important_score * (self.importance_base ** new_delta)
+        return new_recency, new_importance, new_delta

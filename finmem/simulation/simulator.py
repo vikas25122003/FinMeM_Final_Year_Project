@@ -187,6 +187,12 @@ class TradingSimulator:
             run_mode=run_mode,
             future_record=future_record,
             momentum=momentum,
+            portfolio_state={
+                "cash": self.portfolio.cash,
+                "shares": self.portfolio.shares,
+                "position_value": self.portfolio.position_value,
+                "total_value": self.portfolio.total_value,
+            },
         )
         
         self.reflection_results[cur_date] = reflection_result
@@ -212,7 +218,9 @@ class TradingSimulator:
         self._update_access_counters()
         
         # 10. Memory system step (decay, cleanup, jumps)
-        self.brain.step()
+        # Pass today's date so AdaptiveExponentialDecay (Objective 1) can
+        # look up the correct market regime for this specific trading day.
+        self.brain.step(current_date=str(cur_date))
         
         self.day_counter += 1
         

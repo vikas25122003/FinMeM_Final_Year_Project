@@ -40,12 +40,22 @@ Respond ONLY with valid JSON, no other text."""
 test_investment_info_prefix = (
     "Today's date is {cur_date}. You are analyzing the stock {symbol} "
     "and need to make an investment decision.\n\n"
+    "Current Portfolio State:\n"
+    "  Cash: ${cash:,.2f}\n"
+    "  Shares Held: {shares:.2f}\n"
+    "  Position Value: ${position_value:,.2f}\n"
+    "  Total Value: ${total_value:,.2f}\n\n"
 )
 
 test_prompt = """You are a professional financial analyst making a trading decision.
 Based on the investment information and memories below, decide whether to buy, hold, or sell.
 
 {investment_info}
+
+CONSTRAINTS:
+- You can only SELL if you currently hold shares (Shares Held > 0).
+- You can only BUY if you have enough cash.
+- If you hold 0 shares, your only valid choices are BUY or HOLD.
 
 Respond with a JSON object containing:
 1. "investment_decision": One of "buy", "hold", or "sell".

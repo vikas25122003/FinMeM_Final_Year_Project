@@ -1,0 +1,14 @@
+# requirements_obj1.txt
+# Objective 1: Regime-Conditioned Adaptive Memory Decay
+#
+# ALL dependencies below are already present in requirements.txt.
+# Objective 1 requires ZERO new packages.
+# This file is provided for clarity and documentation only.
+
+yfinance>=0.2.36        # Price data for regime feature computation
+pandas>=2.0.0           # DataFrames for rolling vol / momentum
+numpy>=1.24.0           # Math (std, nan checks)
+python-dotenv>=1.0.0    # Env var loading (.env)
+
+# Future work (Objective 1 HMM mode, not required now):
+# hmmlearn>=0.3.0       # Gaussian HMM regime classifier (optional)

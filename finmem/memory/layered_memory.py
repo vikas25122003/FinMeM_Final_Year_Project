@@ -24,6 +24,7 @@ from enum import Enum
 from .embeddings import get_embedding_model, EmbeddingModel
 from .memory_functions import (
     ExponentialDecay,
+    AdaptiveExponentialDecay,
     LinearCompoundScore,
     ImportanceScoreInitialization,
     RecencyScoreInitialization,
@@ -332,8 +333,14 @@ class MemoryDB:
 
         return success_ids
 
-    def _decay(self) -> None:
-        """Apply exponential decay to all memories."""
+    def _decay(self, current_date: Optional[str] = None) -> None:
+        """Apply exponential decay to all memories.
+        
+        Args:
+            current_date: Today's date string (YYYY-MM-DD).
+                          Passed to AdaptiveExponentialDecay so it can
+                          look up the market regime for this specific day.
+        """
         for symbol in self.universe:
             for record in self.universe[symbol]["score_memory"]:
                 (
@@ -343,6 +350,8 @@ class MemoryDB:
                 ) = self.decay_function(
                     important_score=record["important_score"],
                     delta=record["delta"],
+                    ticker=symbol,
+                    current_date=current_date,
                 )
                 record["compound_score"] = (
                     self.compound_score_calc.recency_and_importance_score(
@@ -397,13 +406,16 @@ class MemoryDB:
             new_index.add(embs.astype(np.float32))
         self.universe[symbol]["faiss_index"] = new_index
 
-    def step(self) -> List[int]:
+    def step(self, current_date: Optional[str] = None) -> List[int]:
         """One time step: decay then clean up.
         
+        Args:
+            current_date: Today's date string (YYYY-MM-DD) — passed to
+                          AdaptiveExponentialDecay for regime detection.
         Returns:
             List of removed memory IDs.
         """
-        self._decay()
+        self._decay(current_date=current_date)
         return self._clean_up()
 
     def prepare_jump(self) -> Tuple[Dict, Dict, List[int]]:
@@ -653,34 +665,57 @@ class BrainDB:
         Paper values:
             Q_shallow=14, Q_intermediate=90, Q_deep=365
             α_shallow=0.9, α_intermediate=0.967, α_deep=0.988
+
+        Objective 1 (Adaptive Q):
+            When ADAPTIVE_Q=true, AdaptiveExponentialDecay replaces the fixed Q
+            with a regime-conditioned value looked up per trading day.
+            When ADAPTIVE_Q=false (default), behaviour is identical to base FinMEM.
         """
-        return cls.from_config({
-            "agent_name": "finmem_agent",
-            "short": {
-                "jump_threshold_upper": 0.8,
-                "jump_threshold_lower": -999999,
-                "decay_params": {"decay_rate": 14.0, "importance_base": 0.9},
-                "clean_up_threshold_dict": {"recency_threshold": 0.01, "importance_threshold": 0.01},
-            },
-            "mid": {
-                "jump_threshold_upper": 0.85,
-                "jump_threshold_lower": 0.1,
-                "decay_params": {"decay_rate": 90.0, "importance_base": 0.967},
-                "clean_up_threshold_dict": {"recency_threshold": 0.01, "importance_threshold": 0.01},
-            },
-            "long": {
-                "jump_threshold_upper": 999999,
-                "jump_threshold_lower": 0.15,
-                "decay_params": {"decay_rate": 365.0, "importance_base": 0.988},
-                "clean_up_threshold_dict": {"recency_threshold": 0.005, "importance_threshold": 0.005},
-            },
-            "reflection": {
-                "jump_threshold_upper": 999999,
-                "jump_threshold_lower": -999999,
-                "decay_params": {"decay_rate": 365.0, "importance_base": 0.988},
-                "clean_up_threshold_dict": {"recency_threshold": 0.005, "importance_threshold": 0.005},
-            },
-        })
+        id_gen    = _IdGenerator()
+        emb_model = get_embedding_model()
+        emb_dim   = len(emb_model.embed("test"))
+
+        def _make_adaptive_decay(layer_name: str, decay_rate: float, importance_base: float):
+            """Build AdaptiveExponentialDecay for a named layer."""
+            return AdaptiveExponentialDecay(
+                layer_name=layer_name,
+                decay_rate=decay_rate,
+                importance_base=importance_base,
+            )
+
+        def _make_layer(name, ju, jl, dr, ib, recency_thresh=0.01, importance_thresh=0.01):
+            return MemoryDB(
+                db_name=f"finmem_agent_{name}",
+                id_generator=id_gen,
+                emb_dim=emb_dim,
+                jump_threshold_upper=ju,
+                jump_threshold_lower=jl,
+                importance_score_init=get_importance_score_initialization(name),
+                recency_score_init=RecencyScoreInitialization(),
+                compound_score_calc=LinearCompoundScore(),
+                importance_score_change=LinearImportanceScoreChange(),
+                decay_function=_make_adaptive_decay(name, dr, ib),
+                clean_up_threshold_dict={
+                    "recency_threshold": recency_thresh,
+                    "importance_threshold": importance_thresh,
+                },
+            )
+
+        return cls(
+            agent_name="finmem_agent",
+            emb_model=emb_model,
+            id_generator=id_gen,
+            short_term_memory=_make_layer(
+                "short", ju=0.8,    jl=-999999, dr=14.0,  ib=0.9),
+            mid_term_memory=_make_layer(
+                "mid",   ju=0.85,   jl=0.1,     dr=90.0,  ib=0.967),
+            long_term_memory=_make_layer(
+                "long",  ju=999999, jl=0.15,    dr=365.0, ib=0.988,
+                recency_thresh=0.005, importance_thresh=0.005),
+            reflection_memory=_make_layer(
+                "reflection", ju=999999, jl=-999999, dr=365.0, ib=0.988,
+                recency_thresh=0.005, importance_thresh=0.005),
+        )
 
     def _embed(self, text: Union[str, List[str]]) -> np.ndarray:
         """Generate embeddings for text(s)."""
@@ -791,17 +826,22 @@ class BrainDB:
 
     # ── Step: decay, cleanup, jump ──
 
-    def step(self) -> None:
+    def step(self, current_date: Optional[str] = None) -> None:
         """One time step across all layers.
+        
+        Args:
+            current_date: Today's date string (YYYY-MM-DD).
+                          Passed through to AdaptiveExponentialDecay for
+                          regime-conditioned Q lookup (Objective 1).
         
         1. Decay and cleanup each layer
         2. Process memory jumps between layers (2 iterations)
         """
-        # Step 1: decay + cleanup
-        self.removed_ids.extend(self.short_term_memory.step())
-        self.removed_ids.extend(self.mid_term_memory.step())
-        self.removed_ids.extend(self.long_term_memory.step())
-        self.removed_ids.extend(self.reflection_memory.step())
+        # Step 1: decay + cleanup (pass date for Objective 1 adaptive Q)
+        self.removed_ids.extend(self.short_term_memory.step(current_date))
+        self.removed_ids.extend(self.mid_term_memory.step(current_date))
+        self.removed_ids.extend(self.long_term_memory.step(current_date))
+        self.removed_ids.extend(self.reflection_memory.step(current_date))
 
         # Step 2: memory jumps (run twice for cascading)
         for _ in range(2):
