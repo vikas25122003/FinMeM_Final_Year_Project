@@ -44,13 +44,17 @@ def test_objective_1(ticker: str = "TSLA", date: str = "2022-10-25") -> None:
     features = compute_features(ticker, date)
     print(f"  Features:")
     for k, v in features.items():
-        print(f"    {k:<18} = {v:.6f}")
+        if isinstance(v, tuple):
+            print(f"    {k:<18} = ({len(v)} values, first={v[0]:.6f}, last={v[-1]:.6f})")
+        else:
+            print(f"    {k:<18} = {v:.6f}")
 
     assert isinstance(features, dict), "features must be a dict"
-    assert all(k in features for k in ["vol_20d", "vol_50d", "momentum_20d"]), \
+    assert all(k in features for k in ["vol_20d", "vol_50d", "momentum_20d", "returns_seq"]), \
         "Missing required feature keys"
-    assert all(isinstance(v, float) for v in features.values()), \
-        "All feature values must be floats"
+    assert isinstance(features["vol_20d"], float), "vol_20d must be float"
+    assert isinstance(features["returns_seq"], tuple), "returns_seq must be tuple"
+    assert len(features["returns_seq"]) == 60, "returns_seq must have 60 values"
     print("  ✓ Feature engineering OK\n")
 
     # ── Step 2: Regime Classification ──────────────────────────────────────

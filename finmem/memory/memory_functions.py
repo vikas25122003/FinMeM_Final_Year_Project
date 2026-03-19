@@ -284,8 +284,9 @@ class AdaptiveExponentialDecay:
             from agentic.obj1_regime.classifier import get_classifier
             from agentic.obj1_regime.q_table    import get_Q
 
+            clf_mode = os.environ.get("ADAPTIVE_Q_MODE", "threshold").lower()
             features = compute_features(ticker, date_str)
-            regime   = get_classifier(mode="threshold").predict(features)
+            regime   = get_classifier(mode=clf_mode).predict(features)
             q_val    = float(get_Q(regime, self.layer_name))
 
             logger.debug(
