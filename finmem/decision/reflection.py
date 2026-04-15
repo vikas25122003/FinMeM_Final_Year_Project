@@ -326,7 +326,6 @@ def trading_reflection(
             cur_date=cur_date, symbol=symbol, future_record=future_record
         )
         investment_info += memory_text
-        prompt = train_prompt.format(investment_info=investment_info)
     else:
         # Include portfolio state so LLM knows current holdings
         ps = portfolio_state or {"cash": 100000.0, "shares": 0.0,
@@ -346,6 +345,34 @@ def trading_reflection(
             investment_info += test_momentum_explanation
             investment_info = _add_momentum_info(momentum, investment_info)
 
+    # ── Objective 3: Inject cross-ticker signals ──
+    import os as _os
+    if _os.getenv("CROSS_TICKER", "false").lower() == "true":
+        try:
+            from agentic.obj3_correlation.retrieval import (
+                get_cross_ticker_memories, format_cross_ticker_prompt_block
+            )
+            from agentic.obj3_correlation.matrix import compute_correlation_matrix
+
+            corr_matrix = compute_correlation_matrix(reference_date=str(cur_date))
+            query_emb = brain._embed(character_string)
+            cross_memories = get_cross_ticker_memories(
+                target_ticker=symbol,
+                query_embedding=query_emb,
+                corr_matrix=corr_matrix,
+                brain_db=brain,
+                top_k=int(_os.getenv("CROSS_TICKER_TOP_K", "2")),
+                threshold=float(_os.getenv("CORRELATION_THRESHOLD", "0.6")),
+            )
+            cross_block = format_cross_ticker_prompt_block(cross_memories)
+            investment_info += cross_block
+        except Exception as e:
+            logger.warning(f"[Obj3] Cross-ticker injection failed: {e}")
+
+    # Build final prompt
+    if run_mode == "train":
+        prompt = train_prompt.format(investment_info=investment_info)
+    else:
         prompt = test_prompt.format(investment_info=investment_info)
 
     # Call LLM
@@ -375,6 +402,27 @@ def trading_reflection(
 
     # Paper: Apply promotion bonus to pivotal memories
     _apply_promotion_bonus(brain, symbol, result)
+
+    # ── Objective 2: Log reflection for importance training ──
+    import os as _os2
+    if _os2.getenv("LEARNED_IMPORTANCE", "false").lower() == "true":
+        try:
+            from agentic.obj2_importance.logger import log_reflection
+            log_reflection(
+                date=str(cur_date),
+                ticker=symbol,
+                decision=result.get("investment_decision", "hold"),
+                memory_ids_used=(
+                    result.get("short_memory_ids", []) +
+                    result.get("mid_memory_ids", []) +
+                    result.get("long_memory_ids", []) +
+                    result.get("reflection_memory_ids", [])
+                ),
+                rationale=result.get("summary_reason", ""),
+                cumulative_return=0.0,
+            )
+        except Exception as e:
+            logger.warning(f"[Obj2] Reflection logging failed: {e}")
 
     # Build full result with all memory IDs used
     result["_all_memory_ids"] = {

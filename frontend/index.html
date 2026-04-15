@@ -1,0 +1,414 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>FinMEM Dashboard — Agentic Trading Agent</title>
+    <meta name="description" content="Interactive dashboard for the Agentic FinMEM trading agent with learned importance scoring and cross-ticker memory contextualization.">
+    <link rel="stylesheet" href="styles.css">
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🧠</text></svg>">
+</head>
+<body>
+    <div class="app-container">
+
+        <!-- ── Header ──────────────────────────────────── -->
+        <header class="header" id="app-header">
+            <div class="header-left">
+                <div class="logo">🧠</div>
+                <div class="header-title">
+                    <h1>Agentic FinMEM</h1>
+                    <p>LLM Trading Agent with Layered Memory</p>
+                </div>
+            </div>
+            <div class="header-status" id="header-status">
+                <span class="status-badge inactive" id="badge-obj1">
+                    <span class="status-dot"></span> Obj1: Adaptive Q
+                </span>
+                <span class="status-badge inactive" id="badge-obj2">
+                    <span class="status-dot"></span> Obj2: Importance
+                </span>
+                <span class="status-badge inactive" id="badge-obj3">
+                    <span class="status-dot"></span> Obj3: Cross-Ticker
+                </span>
+            </div>
+        </header>
+
+        <!-- ── Navigation ──────────────────────────────── -->
+        <nav class="nav-tabs" id="nav-tabs">
+            <button class="nav-tab active" data-tab="dashboard" id="tab-dashboard">
+                <span class="tab-icon">📊</span> Dashboard
+            </button>
+            <button class="nav-tab" data-tab="obj2" id="tab-obj2">
+                <span class="tab-icon">🧪</span> Objective 2
+            </button>
+            <button class="nav-tab" data-tab="obj3" id="tab-obj3">
+                <span class="tab-icon">🔗</span> Objective 3
+            </button>
+            <button class="nav-tab" data-tab="simulation" id="tab-simulation">
+                <span class="tab-icon">🚀</span> Simulation
+            </button>
+        </nav>
+
+        <!-- ═══════════════════════════════════════════════
+             TAB 1: DASHBOARD
+             ═══════════════════════════════════════════════ -->
+        <div class="tab-panel active" id="panel-dashboard">
+            <!-- Status Cards -->
+            <div class="grid-4" id="dashboard-stats">
+                <div class="stat-card">
+                    <div class="stat-value" id="stat-provider">—</div>
+                    <div class="stat-label">LLM Provider</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-value" id="stat-model">—</div>
+                    <div class="stat-label">Model ID</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-value success" id="stat-objectives">0/3</div>
+                    <div class="stat-label">Objectives Active</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-value" id="stat-importance">—</div>
+                    <div class="stat-label">Importance Model</div>
+                </div>
+            </div>
+
+            <!-- Architecture Overview -->
+            <div class="card">
+                <div class="card-header">
+                    <div>
+                        <div class="card-title"><span class="icon">🏗️</span> System Architecture</div>
+                        <div class="card-subtitle">Agentic FinMEM enhancement pipeline</div>
+                    </div>
+                </div>
+                <div class="info-banner">
+                    <span class="info-icon">💡</span>
+                    <div>
+                        <strong>Three objectives enhance base FinMEM:</strong><br>
+                        <strong>Obj1:</strong> Regime-conditioned HMM replaces fixed memory decay Q with adaptive values based on BULL/SIDEWAYS/CRISIS market detection.<br>
+                        <strong>Obj2:</strong> LogisticRegression classifier replaces random v_E importance initialization with learned predictions from trading outcomes.<br>
+                        <strong>Obj3:</strong> Cross-ticker memory retrieval injects correlated asset signals + concentration guard prevents over-allocation.
+                    </div>
+                </div>
+            </div>
+
+            <!-- Model Info -->
+            <div class="grid-2">
+                <div class="card">
+                    <div class="card-header">
+                        <div class="card-title"><span class="icon">🤖</span> LLM Configuration</div>
+                    </div>
+                    <div id="llm-config-details">
+                        <div class="toggle-row">
+                            <span class="toggle-label">Provider</span>
+                            <span id="cfg-provider" style="color: var(--accent-cyan); font-weight: 600;">—</span>
+                        </div>
+                        <div class="toggle-row">
+                            <span class="toggle-label">Model ID</span>
+                            <span id="cfg-model" style="color: var(--accent-purple); font-family: 'JetBrains Mono', monospace; font-size: 13px;">—</span>
+                        </div>
+                        <div class="toggle-row">
+                            <span class="toggle-label">Portfolio Tickers</span>
+                            <span id="cfg-tickers" style="color: var(--accent-emerald); font-size: 13px;">—</span>
+                        </div>
+                    </div>
+                </div>
+                <div class="card">
+                    <div class="card-header">
+                        <div class="card-title"><span class="icon">⚙️</span> Objective Status</div>
+                    </div>
+                    <div id="objective-details">
+                        <div class="toggle-row">
+                            <span class="toggle-label">Obj1: Adaptive Q (HMM)</span>
+                            <span id="obj1-status" class="action-badge hold">OFF</span>
+                        </div>
+                        <div class="toggle-row">
+                            <span class="toggle-label">Obj2: Learned Importance</span>
+                            <span id="obj2-status" class="action-badge hold">OFF</span>
+                        </div>
+                        <div class="toggle-row">
+                            <span class="toggle-label">Obj3: Cross-Ticker</span>
+                            <span id="obj3-status" class="action-badge hold">OFF</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- ═══════════════════════════════════════════════
+             TAB 2: OBJECTIVE 2
+             ═══════════════════════════════════════════════ -->
+        <div class="tab-panel" id="panel-obj2">
+            <div class="info-banner">
+                <span class="info-icon">🧠</span>
+                <div>
+                    <strong>Objective 2: Learned Importance Scoring</strong><br>
+                    Replaces FinMem's random v_E ∈ {40, 60, 80} coin-flip with a supervised LogisticRegression
+                    classifier trained on the agent's own trading history. Closes the feedback loop between
+                    memory importance and trading outcomes.
+                </div>
+            </div>
+
+            <div class="grid-2">
+                <!-- Test Panel -->
+                <div class="card">
+                    <div class="card-header">
+                        <div class="card-title"><span class="icon">🧪</span> Run Test</div>
+                    </div>
+                    <p style="color: var(--text-secondary); font-size: 13px; margin-bottom: 16px;">
+                        End-to-end test: creates fake reflections → builds features → trains classifier → inference check.
+                    </p>
+                    <button class="btn btn-primary" id="btn-test-obj2" onclick="testObj2()">
+                        <span class="spinner"></span>
+                        <span class="btn-text">▶ Run Objective 2 Test</span>
+                    </button>
+                    <div class="output-console" id="output-obj2" style="margin-top: 16px;"></div>
+                </div>
+
+                <!-- Importance Score Calculator -->
+                <div class="card">
+                    <div class="card-header">
+                        <div class="card-title"><span class="icon">🎯</span> Score Calculator</div>
+                    </div>
+                    <p style="color: var(--text-secondary); font-size: 13px; margin-bottom: 16px;">
+                        Predict importance v_E for a memory with given features.
+                    </p>
+
+                    <div class="form-group">
+                        <label class="form-label">Memory Layer</label>
+                        <select class="form-select" id="calc-layer">
+                            <option value="short">Short (Shallow)</option>
+                            <option value="mid">Mid (Intermediate)</option>
+                            <option value="long">Long (Deep)</option>
+                            <option value="reflection">Reflection</option>
+                        </select>
+                    </div>
+
+                    <div class="slider-group">
+                        <div class="slider-header">
+                            <span class="slider-label">Age (Days)</span>
+                            <span class="slider-value" id="val-age">5</span>
+                        </div>
+                        <input type="range" id="calc-age" min="0" max="60" value="5"
+                               oninput="document.getElementById('val-age').textContent=this.value">
+                    </div>
+
+                    <div class="slider-group">
+                        <div class="slider-header">
+                            <span class="slider-label">Access Count</span>
+                            <span class="slider-value" id="val-access">2</span>
+                        </div>
+                        <input type="range" id="calc-access" min="0" max="20" value="2"
+                               oninput="document.getElementById('val-access').textContent=this.value">
+                    </div>
+
+                    <div class="slider-group">
+                        <div class="slider-header">
+                            <span class="slider-label">Text Length</span>
+                            <span class="slider-value" id="val-textlen">200</span>
+                        </div>
+                        <input type="range" id="calc-textlen" min="10" max="1000" value="200"
+                               oninput="document.getElementById('val-textlen').textContent=this.value">
+                    </div>
+
+                    <div class="slider-group">
+                        <div class="slider-header">
+                            <span class="slider-label">Sentiment</span>
+                            <span class="slider-value" id="val-sentiment">0.0</span>
+                        </div>
+                        <input type="range" id="calc-sentiment" min="-100" max="100" value="0"
+                               oninput="document.getElementById('val-sentiment').textContent=(this.value/100).toFixed(2)">
+                    </div>
+
+                    <button class="btn btn-success" onclick="calcImportance()" style="margin-top: 8px;">
+                        🎯 Calculate Score
+                    </button>
+
+                    <div id="calc-result" style="margin-top: 16px;"></div>
+                </div>
+            </div>
+
+            <!-- Reflection Logs -->
+            <div class="card">
+                <div class="card-header">
+                    <div class="card-title"><span class="icon">📋</span> Reflection Logs</div>
+                    <button class="btn btn-secondary" onclick="loadReflections()">Refresh</button>
+                </div>
+                <div class="output-console" id="output-reflections" style="max-height: 250px;">
+                    Click "Refresh" to load reflection logs...
+                </div>
+            </div>
+        </div>
+
+        <!-- ═══════════════════════════════════════════════
+             TAB 3: OBJECTIVE 3
+             ═══════════════════════════════════════════════ -->
+        <div class="tab-panel" id="panel-obj3">
+            <div class="info-banner">
+                <span class="info-icon">🔗</span>
+                <div>
+                    <strong>Objective 3: Portfolio-Aware Cross-Ticker Memory</strong><br>
+                    Extends FinMem from single-stock to portfolio-aware by computing 30-day rolling Pearson
+                    correlations, injecting cross-asset memory signals, and applying a concentration guard
+                    to prevent over-allocation to correlated positions.
+                </div>
+            </div>
+
+            <div class="grid-2">
+                <!-- Test Panel -->
+                <div class="card">
+                    <div class="card-header">
+                        <div class="card-title"><span class="icon">🧪</span> Run Test</div>
+                    </div>
+                    <p style="color: var(--text-secondary); font-size: 13px; margin-bottom: 16px;">
+                        Tests correlation matrix computation, prompt formatting, and concentration guard logic.
+                    </p>
+                    <button class="btn btn-primary" id="btn-test-obj3" onclick="testObj3()">
+                        <span class="spinner"></span>
+                        <span class="btn-text">▶ Run Objective 3 Test</span>
+                    </button>
+                    <div class="output-console" id="output-obj3" style="margin-top: 16px;"></div>
+                </div>
+
+                <!-- Concentration Guard Demo -->
+                <div class="card">
+                    <div class="card-header">
+                        <div class="card-title"><span class="icon">🛡️</span> Concentration Guard</div>
+                    </div>
+                    <p style="color: var(--text-secondary); font-size: 13px; margin-bottom: 16px;">
+                        Demo: tests if BUY decisions on correlated assets get overridden.
+                    </p>
+                    <button class="btn btn-warning" id="btn-test-guard" onclick="testGuard()">
+                        <span class="spinner"></span>
+                        <span class="btn-text">🛡️ Test Guard</span>
+                    </button>
+                    <div id="guard-results" style="margin-top: 16px;"></div>
+                </div>
+            </div>
+
+            <!-- Correlation Matrix Heatmap -->
+            <div class="card">
+                <div class="card-header">
+                    <div>
+                        <div class="card-title"><span class="icon">🔥</span> Correlation Heatmap</div>
+                        <div class="card-subtitle">30-day rolling Pearson correlation between portfolio tickers</div>
+                    </div>
+                    <button class="btn btn-primary" id="btn-load-corr" onclick="loadCorrelation()">
+                        <span class="spinner"></span>
+                        <span class="btn-text">📊 Compute Matrix</span>
+                    </button>
+                </div>
+                <div class="heatmap-container" id="heatmap-container">
+                    <p style="color: var(--text-muted); text-align: center; padding: 40px; font-size: 14px;">
+                        Click "Compute Matrix" to fetch real-time correlation data via yfinance.
+                    </p>
+                </div>
+            </div>
+        </div>
+
+        <!-- ═══════════════════════════════════════════════
+             TAB 4: SIMULATION
+             ═══════════════════════════════════════════════ -->
+        <div class="tab-panel" id="panel-simulation">
+            <div class="info-banner">
+                <span class="info-icon">🚀</span>
+                <div>
+                    <strong>Run FinMEM Simulation</strong><br>
+                    Execute a full trading simulation with configurable objectives, ticker, date range, and mode.
+                    Results include paper metrics (Sharpe, CR, Volatility, Drawdown) vs Buy &amp; Hold baseline.
+                </div>
+            </div>
+
+            <div class="grid-2">
+                <!-- Config Panel -->
+                <div class="card">
+                    <div class="card-header">
+                        <div class="card-title"><span class="icon">⚙️</span> Configuration</div>
+                    </div>
+
+                    <div class="form-group">
+                        <label class="form-label">Ticker</label>
+                        <select class="form-select" id="sim-ticker">
+                            <option value="TSLA">TSLA — Tesla</option>
+                            <option value="NVDA">NVDA — NVIDIA</option>
+                            <option value="MSFT">MSFT — Microsoft</option>
+                            <option value="AMZN">AMZN — Amazon</option>
+                            <option value="NFLX">NFLX — Netflix</option>
+                            <option value="AAPL">AAPL — Apple</option>
+                        </select>
+                    </div>
+
+                    <div class="form-group">
+                        <label class="form-label">Mode</label>
+                        <select class="form-select" id="sim-mode">
+                            <option value="train">Train (populate memory + reflect)</option>
+                            <option value="test">Test (blind decision making)</option>
+                        </select>
+                    </div>
+
+                    <div class="grid-2">
+                        <div class="form-group">
+                            <label class="form-label">Start Date</label>
+                            <input type="date" class="form-input" id="sim-start" value="2022-03-14">
+                        </div>
+                        <div class="form-group">
+                            <label class="form-label">End Date</label>
+                            <input type="date" class="form-input" id="sim-end" value="2022-06-15">
+                        </div>
+                    </div>
+
+                    <div class="form-group">
+                        <label class="form-label">Initial Capital ($)</label>
+                        <input type="number" class="form-input" id="sim-capital" value="100000">
+                    </div>
+
+                    <!-- Objective toggles -->
+                    <div style="margin-top: 12px;">
+                        <div class="toggle-row">
+                            <span class="toggle-label">Obj1: Adaptive Q</span>
+                            <label class="toggle">
+                                <input type="checkbox" id="sim-obj1" checked>
+                                <span class="toggle-slider"></span>
+                            </label>
+                        </div>
+                        <div class="toggle-row">
+                            <span class="toggle-label">Obj2: Learned Importance</span>
+                            <label class="toggle">
+                                <input type="checkbox" id="sim-obj2" checked>
+                                <span class="toggle-slider"></span>
+                            </label>
+                        </div>
+                        <div class="toggle-row">
+                            <span class="toggle-label">Obj3: Cross-Ticker</span>
+                            <label class="toggle">
+                                <input type="checkbox" id="sim-obj3">
+                                <span class="toggle-slider"></span>
+                            </label>
+                        </div>
+                    </div>
+
+                    <button class="btn btn-primary" id="btn-run-sim" onclick="runSimulation()" style="margin-top: 16px; width: 100%;">
+                        <span class="spinner"></span>
+                        <span class="btn-text">🚀 Run Simulation</span>
+                    </button>
+                </div>
+
+                <!-- Results Panel -->
+                <div class="card">
+                    <div class="card-header">
+                        <div class="card-title"><span class="icon">📈</span> Results</div>
+                    </div>
+                    <div id="sim-results">
+                        <p style="color: var(--text-muted); text-align: center; padding: 60px 20px; font-size: 14px;">
+                            Configure and run a simulation to see results here.
+                        </p>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+    </div>
+
+    <script src="app.js"></script>
+</body>
+</html>

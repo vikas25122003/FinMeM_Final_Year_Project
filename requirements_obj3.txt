@@ -1,0 +1,6 @@
+# Objective 3 — Cross-Ticker Memory Contextualization
+chromadb>=0.4.0            # persistent vector store for cross-ticker retrieval
+scipy>=1.11.0              # for Pearson correlation
+yfinance>=0.2.36           # already in base FinMem
+pandas>=2.0.0              # already in base FinMem
+numpy>=1.24.0              # already in base FinMem

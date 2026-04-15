@@ -127,13 +127,41 @@ class ImportanceScoreInitialization:
     Shallow:       P(0.4)=0.6, P(0.6)=0.3, P(0.8)=0.1
     Intermediate:  P(0.4)=0.2, P(0.6)=0.6, P(0.8)=0.2
     Deep:          P(0.4)=0.1, P(0.6)=0.3, P(0.8)=0.6
+
+    Objective 2 Extension:
+        When LEARNED_IMPORTANCE=true, uses a trained classifier to predict v_E
+        instead of random sampling. Maps the prediction from [40,80] → [0.4,0.8].
     """
     
     values: List[float] = field(default_factory=lambda: [0.4, 0.6, 0.8])
     probabilities: List[float] = field(default_factory=lambda: [0.33, 0.34, 0.33])
+    layer_name: str = "short"  # Set by get_importance_score_initialization()
     
-    def __call__(self) -> float:
-        """Return a probabilistically sampled importance score."""
+    def __call__(self, text_length: int = 100, sentiment_score: float = 0.0) -> float:
+        """Return an importance score — learned or random.
+        
+        When LEARNED_IMPORTANCE=true, delegates to Objective 2 inference.
+        Otherwise, uses the paper's random sampling.
+        
+        Args:
+            text_length:     Character count of the memory text (Obj2 feature).
+            sentiment_score: Sentiment score in [-1, 1] (Obj2 feature).
+        """
+        if os.environ.get("LEARNED_IMPORTANCE", "false").lower() == "true":
+            try:
+                from agentic.obj2_importance.inference import get_importance_score
+                v_E = get_importance_score(
+                    layer=self.layer_name,
+                    age_days=0,
+                    access_count=0,
+                    text_length=text_length,
+                    sentiment_score=sentiment_score,
+                )
+                # Map from [40, 80] → [0.4, 0.8]
+                return v_E / 100.0
+            except Exception as exc:
+                logger.debug(f"[Obj2] Learned importance failed, using random: {exc}")
+        
         return random.choices(self.values, weights=self.probabilities, k=1)[0]
 
 
@@ -164,7 +192,8 @@ def get_importance_score_initialization(
     probs = layer_probs.get(memory_layer, [0.33, 0.34, 0.33])
     return ImportanceScoreInitialization(
         values=[0.4, 0.6, 0.8],
-        probabilities=probs
+        probabilities=probs,
+        layer_name=memory_layer,
     )
 
 
