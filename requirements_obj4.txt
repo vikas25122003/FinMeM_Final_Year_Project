@@ -1,0 +1,8 @@
+# requirements_obj4.txt — Objective 4: Multi-Agent Memory Architecture
+# Framework: LangGraph (by LangChain team)
+langgraph>=0.2.0            # Multi-agent state graph orchestration
+langchain-aws>=0.2.0        # ChatBedrock for all AWS Bedrock models
+langchain-core>=0.3.0       # BaseMessage, HumanMessage, SystemMessage
+
+# Already installed from Obj1-3:
+# chromadb, scikit-learn, yfinance, pandas, hmmlearn, boto3, scipy
