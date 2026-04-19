@@ -102,3 +102,10 @@ artifacts/
 data/datasets/
 models/
 docs/build/
+
+# Runtime / generated directories
+cache/
+datasets/
+checkpoints/
+finmem_chromadb/
+sentence-transformers/

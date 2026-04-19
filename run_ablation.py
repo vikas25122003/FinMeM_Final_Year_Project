@@ -39,13 +39,17 @@ PYTHON = sys.executable  # uses the active .venv interpreter
 
 # Train period (populate memory)
 TRAIN_START = "2022-03-14"
-TRAIN_END   = "2022-03-30"
+TRAIN_END   = "2022-04-08"   # ~20 trading days
 
 # Test period (blind trading)
 TEST_START  = "2022-10-03"
-TEST_END    = "2022-10-07"   # ~3 weeks (short to save API costs)
+TEST_END    = "2022-10-28"   # ~20 trading days
 
 CHECKPOINT_DIR = "./checkpoints"
+
+# Pre-built datasets (skip Yahoo Finance during simulation)
+TRAIN_DATASET = "./datasets/tsla_train_full.pkl"
+TEST_DATASET  = "./datasets/tsla_test_full.pkl"
 
 CONFIGS = [
     {
@@ -181,21 +185,28 @@ def build_cmd(script: str, mode: str, ckp_name: str, ticker: str = TICKER) -> li
     if mode == "train":
         start, end = TRAIN_START, TRAIN_END
         extra = ["--save-checkpoint", ckp_path]
+        dataset = TRAIN_DATASET
     else:
         start, end = TEST_START, TEST_END
         extra = ["--checkpoint", ckp_path]
+        dataset = TEST_DATASET
+
+    # Add dataset if file exists (skips Yahoo Finance download)
+    dataset_args = []
+    if os.path.exists(dataset):
+        dataset_args = ["--dataset", dataset]
 
     # run_obj3.py uses --tickers instead of --ticker
     if script == "run_obj3.py":
         cmd = [PYTHON, script, "--tickers", ticker, "--mode", mode,
-               "--start-date", start, "--end-date", end] + extra
-    # run_obj4.py doesn't use --checkpoint
+               "--start-date", start, "--end-date", end] + dataset_args + extra
+    # run_obj4.py doesn't use --checkpoint or --dataset (uses yf.download directly)
     elif script == "run_obj4.py":
         cmd = [PYTHON, script, "--ticker", ticker, "--mode", mode,
                "--start-date", start, "--end-date", end]
     else:
         cmd = [PYTHON, script, "--ticker", ticker, "--mode", mode,
-               "--start-date", start, "--end-date", end] + extra
+               "--start-date", start, "--end-date", end] + dataset_args + extra
 
     return cmd
 
@@ -207,8 +218,9 @@ def run_single_config(cfg: dict, skip_train: bool = False) -> dict:
     ckp_name = cfg["ckp"]
     env_vars = cfg["env"]
 
-    # Build env: copy current env + override feature flags
+    # Build env: copy current env + override feature flags + enable LLM cache
     run_env = os.environ.copy()
+    run_env["LLM_CACHE"] = "true"
     for k, v in env_vars.items():
         run_env[k] = v
 
@@ -227,7 +239,7 @@ def run_single_config(cfg: dict, skip_train: bool = False) -> dict:
             proc = subprocess.run(
                 cmd, env=run_env,
                 capture_output=True, text=True, check=False,
-                timeout=900,  # 15 min max
+                timeout=1800,  # 30 min max
             )
             raw_outputs["train"] = proc.stdout + "\n" + proc.stderr
             if proc.returncode != 0:
@@ -257,7 +269,7 @@ def run_single_config(cfg: dict, skip_train: bool = False) -> dict:
         proc = subprocess.run(
             cmd, env=run_env,
             capture_output=True, text=True, check=False,
-            timeout=900,
+            timeout=1800,
         )
         output = proc.stdout + "\n" + proc.stderr
         raw_outputs["test"] = output
@@ -298,6 +310,8 @@ def run_single_config(cfg: dict, skip_train: bool = False) -> dict:
 # ── Main ───────────────────────────────────────────────────────
 
 def main():
+    global TRAIN_START, TRAIN_END, TEST_START, TEST_END, TICKER
+
     parser = argparse.ArgumentParser(
         description="FinMEM Ablation Study — Train + Test all configurations"
     )
@@ -309,10 +323,31 @@ def main():
                         help='Run only a specific config, e.g. --only "Base FinMEM"')
     parser.add_argument("--ticker", type=str, default=TICKER,
                         help=f"Ticker to test (default: {TICKER})")
+    parser.add_argument("--train-start", type=str, default=None,
+                        help="Override train start date (YYYY-MM-DD)")
+    parser.add_argument("--train-end", type=str, default=None,
+                        help="Override train end date (YYYY-MM-DD)")
+    parser.add_argument("--test-start", type=str, default=None,
+                        help="Override test start date (YYYY-MM-DD)")
+    parser.add_argument("--test-end", type=str, default=None,
+                        help="Override test end date (YYYY-MM-DD)")
+    parser.add_argument("--label", type=str, default=None,
+                        help="Label for this run (used in output filenames, e.g. 'paper', '3mo', '6mo')")
     args = parser.parse_args()
 
-    # Override module-level ticker
+    # Override module-level globals from CLI
+    if args.train_start:
+        TRAIN_START = args.train_start
+    if args.train_end:
+        TRAIN_END = args.train_end
+    if args.test_start:
+        TEST_START = args.test_start
+    if args.test_end:
+        TEST_END = args.test_end
     ticker = args.ticker
+    TICKER = ticker
+
+    run_label = args.label or f"{TEST_START}_to_{TEST_END}"
 
     # Filter configs if --only is specified
     configs = CONFIGS
@@ -329,6 +364,7 @@ def main():
     print(f"  Ticker:       {ticker}")
     print(f"  Train Period: {TRAIN_START} → {TRAIN_END}")
     print(f"  Test Period:  {TEST_START} → {TEST_END}")
+    print(f"  Label:        {run_label}")
     print(f"  Configs:      {len(configs)}")
     print(f"  Mode:         {'Parallel' if args.parallel else 'Sequential'}")
     print(f"  Skip Train:   {args.skip_train}")
@@ -384,7 +420,7 @@ def main():
     ]
 
     # ── Save CSV ───────────────────────────────────────────────
-    csv_path = "artifacts/ablation_results.csv"
+    csv_path = f"artifacts/ablation_results_{run_label}.csv"
     with open(csv_path, "w", newline="") as f:
         writer = csv.DictWriter(f, fieldnames=columns, extrasaction="ignore")
         writer.writeheader()
@@ -393,9 +429,9 @@ def main():
     print(f"\n📄 CSV saved → {csv_path}")
 
     # ── Save Markdown ──────────────────────────────────────────
-    md_path = "artifacts/ablation_results.md"
+    md_path = f"artifacts/ablation_results_{run_label}.md"
     with open(md_path, "w") as f:
-        f.write("# 📊 FinMEM Ablation Study Results\n\n")
+        f.write(f"# 📊 FinMEM Ablation Study Results — {run_label}\n\n")
         f.write(f"**Ticker:** {ticker}\n")
         f.write(f"**Train Period:** {TRAIN_START} → {TRAIN_END}\n")
         f.write(f"**Test Period:** {TEST_START} → {TEST_END}\n")

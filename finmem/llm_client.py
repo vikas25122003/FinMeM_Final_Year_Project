@@ -14,6 +14,7 @@ from typing import Optional, List, Dict, Any
 from dataclasses import dataclass
 
 from .config import LLMConfig, DEFAULT_CONFIG
+from .llm_cache import cache_key, read_cache, write_cache
 
 logger = logging.getLogger(__name__)
 
@@ -136,16 +137,29 @@ class LLMClient:
         """Send a chat request to the LLM.
         
         Routes to the correct provider automatically.
+        Checks disk cache first — same prompt+model returns cached response.
         """
         if isinstance(messages, str):
             messages = [ChatMessage(role="user", content=messages)]
         
+        # ── Cache check ──
+        model_id = model or getattr(self, 'bedrock_model', getattr(self, 'deepseek_model', self.config.model))
+        key = cache_key(messages, model_id)
+        cached = read_cache(key)
+        if cached is not None:
+            return cached
+        
+        # ── Route to provider ──
         if self.provider == "bedrock":
-            return self._chat_bedrock(messages, temperature, max_tokens)
+            response = self._chat_bedrock(messages, temperature, max_tokens)
         elif self.provider == "deepseek":
-            return self._chat_deepseek(messages, temperature, max_tokens)
+            response = self._chat_deepseek(messages, temperature, max_tokens)
         else:
-            return self._chat_openrouter(messages, model, temperature, max_tokens)
+            response = self._chat_openrouter(messages, model, temperature, max_tokens)
+        
+        # ── Cache write ──
+        write_cache(key, response)
+        return response
     
     # ── OpenRouter Chat ────────────────────────────────────────────
     
