@@ -314,6 +314,33 @@ def run_simulation():
         return jsonify({"success": False, "error": str(e), "traceback": traceback.format_exc()})
 
 
+@app.route("/api/ablation-results", methods=["GET"])
+def get_ablation_results():
+    """Get list of ablation results and their content."""
+    try:
+        import glob
+        import csv
+        results_files = glob.glob(os.path.join(project_root, "artifacts", "ablation_results*.csv"))
+        
+        all_results = {}
+        for path in results_files:
+            filename = os.path.basename(path)
+            label = filename.replace("ablation_results_", "").replace(".csv", "")
+            if label == "ablation_results":
+                label = "default"
+            
+            data = []
+            with open(path, "r") as f:
+                reader = csv.DictReader(f)
+                for row in reader:
+                    data.append(row)
+            all_results[label] = data
+            
+        return jsonify({"success": True, "results": all_results})
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e), "traceback": traceback.format_exc()})
+
+
 if __name__ == "__main__":
     print("\n  🚀 FinMEM Dashboard Server")
     print("  ────────────────────────────────────")

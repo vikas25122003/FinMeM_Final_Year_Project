@@ -48,8 +48,8 @@ TEST_END    = "2022-10-28"   # ~20 trading days
 CHECKPOINT_DIR = "./checkpoints"
 
 # Pre-built datasets (skip Yahoo Finance during simulation)
-TRAIN_DATASET = "./datasets/tsla_train_full.pkl"
-TEST_DATASET  = "./datasets/tsla_test_full.pkl"
+TRAIN_DATASET = "./datasets/tsla_train_paper.pkl"
+TEST_DATASET  = "./datasets/tsla_test_paper.pkl"
 
 CONFIGS = [
     {

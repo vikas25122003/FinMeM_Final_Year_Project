@@ -234,9 +234,16 @@ def run_simulation(ticker: str, mode: str, start_date: str, end_date: str):
             })
 
     # Final summary
+    from finmem.evaluation.metrics import compute_metrics, compute_buy_and_hold, format_metrics_report
+
     final_value = cash + shares * prices_all[-1]
     cr = (final_value - 100000) / 100000 * 100
     bh_cr = (prices_all[-1] - prices_all[0]) / prices_all[0] * 100
+
+    # Extract portfolio values history
+    portfolio_value_history = [d["total_value"] for d in decisions]
+    agent_metrics = compute_metrics(portfolio_value_history)
+    bh_metrics = compute_buy_and_hold(prices_all, 100000.0)
 
     print("\n" + "═" * 60)
     print(f"  SIMULATION RESULTS: {ticker} ({start_date} → {end_date})")
@@ -249,6 +256,10 @@ def run_simulation(ticker: str, mode: str, start_date: str, end_date: str):
     print(f"  Decisions:     {sum(1 for d in decisions if d.get('decision') == 'BUY')} BUY | "
           f"{sum(1 for d in decisions if d.get('decision') == 'SELL')} SELL | "
           f"{sum(1 for d in decisions if d.get('decision') == 'HOLD')} HOLD")
+
+    print(f"\n  📊 Evaluation Metrics (Paper's 5 Metrics):")
+    print(f"  {'─'*50}")
+    print(format_metrics_report(agent_metrics, bh_metrics, ticker))
     print("═" * 60)
 
 

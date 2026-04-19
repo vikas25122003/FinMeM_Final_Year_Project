@@ -373,10 +373,117 @@ async function runSimulation() {
     setLoading('btn-run-sim', false);
 }
 
+// ── Ablation Run ────────────────────────────────────────────────────────
+
+let ablationDataStore = {};
+
+async function loadAblationResults() {
+    setLoading('btn-load-ablation', true);
+    const select = document.getElementById('ablation-run-select');
+    
+    try {
+        const data = await apiCall('/api/ablation-results', 'GET');
+        
+        if (data.success) {
+            ablationDataStore = data.results;
+            const labels = Object.keys(data.results).sort((a,b) => b.localeCompare(a));
+            
+            if (labels.length === 0) {
+                select.innerHTML = '<option value="">No completed runs found</option>';
+            } else {
+                select.innerHTML = labels.map(L => `<option value="${L}">${L === 'default' ? 'Default Run' : L}</option>`).join('');
+                renderAblationTable();
+            }
+        } else {
+            console.error(data.error);
+        }
+    } catch (err) {
+        console.error('Failed to load ablation results:', err);
+    }
+    
+    setLoading('btn-load-ablation', false);
+}
+
+function renderAblationTable() {
+    const select = document.getElementById('ablation-run-select');
+    const label = select.value;
+    const tbody = document.getElementById('ablation-table-body');
+    
+    if (!label || !ablationDataStore[label]) {
+        tbody.innerHTML = '<tr><td colspan="5" style="text-align:center; padding: 20px; color: var(--text-muted);">Select a run context.</td></tr>';
+        return;
+    }
+    
+    const rows = ablationDataStore[label];
+    
+    if (rows.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="5" style="text-align:center; padding: 20px; color: var(--text-muted);">No data in this run.</td></tr>';
+        return;
+    }
+    
+    // Sort array by name: Base -> Obj1 -> Obj1+2 -> Obj1+2+3 -> Obj1+2+3+4
+    const orderScore = (name) => {
+        if (!name) return 100;
+        const n = name.toLowerCase();
+        if (n.includes('base')) return 0;
+        if (n.includes('obj1+2+3+4')) return 4;
+        if (n.includes('obj1+2+3')) return 3;
+        if (n.includes('obj1+2')) return 2;
+        if (n.includes('obj1')) return 1;
+        return 10;
+    };
+    
+    const sorted = [...rows].sort((a,b) => orderScore(a.Configuration) - orderScore(b.Configuration));
+    
+    let html = '';
+    
+    // Check if we should render B&H baseline (assumes it's present in the first row's columns)
+    const firstObj = sorted[0];
+    if (firstObj["BH Cum. Return (%)"]) {
+        const bhRet = parseFloat(firstObj["BH Cum. Return (%)"] || 0);
+        html += `
+            <tr style="background: rgba(255,255,255,0.02); border-bottom: 1px solid var(--border);">
+                <td style="padding: 12px; font-weight: bold;">Buy & Hold (Baseline)</td>
+                <td style="padding: 12px; font-family: 'JetBrains Mono'; color: ${bhRet >= 0 ? 'var(--accent-emerald)' : 'var(--accent-rose)'};">${bhRet > 0 ? '+' : ''}${bhRet.toFixed(2)}%</td>
+                <td style="padding: 12px; font-family: 'JetBrains Mono';">${parseFloat(firstObj["BH Sharpe Ratio"] || 0).toFixed(4)}</td>
+                <td style="padding: 12px; font-family: 'JetBrains Mono';">${parseFloat(firstObj["BH Max Drawdown (%)"] || 0).toFixed(2)}%</td>
+                <td style="padding: 12px; font-family: 'JetBrains Mono'; color: var(--text-muted);">—</td>
+            </tr>
+        `;
+    }
+    
+    sorted.forEach(r => {
+        const conf = r.Configuration || 'Unknown';
+        const ret = parseFloat(r["Total Return (%)"] || r["Cumulative Return (%)"] || 0);
+        const sharpe = parseFloat(r["Sharpe Ratio"] || 0);
+        const maxdd = parseFloat(r["Max Drawdown (%)"] || 0);
+        const annVol = parseFloat(r["Ann. Volatility"] || 0);
+        
+        const retColor = ret >= 0 ? 'var(--accent-emerald)' : 'var(--accent-rose)';
+        
+        let labelColor = 'var(--text-primary)';
+        if (conf.includes('Obj1+2+3+4')) labelColor = 'var(--accent-purple)';
+        else if (conf.includes('Obj1+2+3')) labelColor = 'var(--accent-cyan)';
+        
+        html += `
+            <tr style="border-bottom: 1px solid var(--border);">
+                <td style="padding: 12px; font-weight: 500; color: ${labelColor};">${conf}</td>
+                <td style="padding: 12px; font-family: 'JetBrains Mono'; color: ${retColor};">${ret > 0 ? '+' : ''}${ret.toFixed(2)}%</td>
+                <td style="padding: 12px; font-family: 'JetBrains Mono';">${sharpe.toFixed(4)}</td>
+                <td style="padding: 12px; font-family: 'JetBrains Mono'; color: var(--accent-amber);">${maxdd.toFixed(2)}%</td>
+                <td style="padding: 12px; font-family: 'JetBrains Mono';">${annVol.toFixed(4)}</td>
+            </tr>
+        `;
+    });
+    
+    tbody.innerHTML = html;
+}
+
 // ── Init ─────────────────────────────────────────────────────────────────
 
 document.addEventListener('DOMContentLoaded', () => {
     loadStatus();
+    loadAblationResults(); // Auto-load results
     // Refresh status every 30s
     setInterval(loadStatus, 30000);
 });

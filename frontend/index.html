@@ -47,6 +47,9 @@
             <button class="nav-tab" data-tab="simulation" id="tab-simulation">
                 <span class="tab-icon">🚀</span> Simulation
             </button>
+            <button class="nav-tab" data-tab="ablation" id="tab-ablation">
+                <span class="tab-icon">🏆</span> Ablation Run
+            </button>
         </nav>
 
         <!-- ═══════════════════════════════════════════════
@@ -405,6 +408,57 @@
                     </div>
                 </div>
             </div>
+        </div>
+
+        <!-- ═══════════════════════════════════════════════
+             TAB 5: ABLATION RUN
+             ═══════════════════════════════════════════════ -->
+        <div class="tab-panel" id="panel-ablation">
+            <div class="info-banner">
+                <span class="info-icon">🏆</span>
+                <div>
+                    <strong>Ablation Run Results</strong><br>
+                    Compare baseline vs incremental FinMEM configurations. This automatically loads completed
+                    ablation runs from the `artifacts/` folder and plots the critical quantitative metrics.
+                </div>
+            </div>
+
+            <div class="card">
+                <div class="card-header">
+                    <div>
+                        <div class="card-title"><span class="icon">📈</span> Comparison Table</div>
+                    </div>
+                    <button class="btn btn-secondary" id="btn-load-ablation" onclick="loadAblationResults()">
+                        <span class="spinner"></span>
+                        <span class="btn-text">🔄 Refresh Results</span>
+                    </button>
+                </div>
+                
+                <div style="margin-top: 16px;">
+                    <label class="form-label">Select Run Context:</label>
+                    <select class="form-select" id="ablation-run-select" onchange="renderAblationTable()" style="max-width: 300px; display: inline-block;">
+                        <option value="">Loading...</option>
+                    </select>
+                </div>
+
+                <div class="table-container" style="margin-top: 16px; overflow-x: auto;">
+                    <table id="ablation-table" style="width: 100%; border-collapse: collapse; font-size: 14px;">
+                        <thead>
+                            <tr style="border-bottom: 2px solid var(--border); text-align: left;">
+                                <th style="padding: 12px; color: var(--text-secondary);">Configuration</th>
+                                <th style="padding: 12px; color: var(--text-secondary);">Return (%)</th>
+                                <th style="padding: 12px; color: var(--text-secondary);">Sharpe</th>
+                                <th style="padding: 12px; color: var(--text-secondary);">MaxDD (%)</th>
+                                <th style="padding: 12px; color: var(--text-secondary);">Ann. Vol</th>
+                            </tr>
+                        </thead>
+                        <tbody id="ablation-table-body">
+                            <tr><td colspan="5" style="text-align:center; padding: 20px; color: var(--text-muted);">No data loaded.</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+            
         </div>
 
     </div>
