@@ -32,6 +32,24 @@ CORS(app)
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(name)s] %(levelname)s: %(message)s")
 logger = logging.getLogger("finmem-ui")
 
+# ── CRITICAL: Change CWD to project root so all relative paths work ────────
+# The server may be launched from frontend/ but all paths (models/, logs/) are
+# relative to the project root. This fixes HMM and reflection log loading.
+os.chdir(project_root)
+logger.info(f"[Startup] Working directory set to: {project_root}")
+
+# Load importance model on startup
+try:
+    from agentic.obj2_importance.inference import load_model
+    model_path = os.path.join(project_root, "models", "importance_clf.pkl")
+    if os.path.exists(model_path):
+        load_model(model_path)
+        logger.info(f"[Startup] Importance model loaded from {model_path}")
+    else:
+        logger.warning(f"[Startup] Importance model not found at {model_path} — run 'Train on Real Reflections' in dashboard")
+except Exception as e:
+    logger.warning(f"[Startup] Could not load importance model: {e}")
+
 
 # ── Static Files ──────────────────────────────────────────────────────────
 
@@ -82,18 +100,24 @@ def system_status():
 
 @app.route("/api/test-obj2", methods=["POST"])
 def test_obj2():
-    """Run Objective 2 end-to-end test."""
+    """Train Obj2 importance classifier on REAL reflection logs."""
     try:
         import io
         from contextlib import redirect_stdout
 
         f = io.StringIO()
         with redirect_stdout(f):
-            from agentic.obj2_importance.test_importance import test_objective_2
-            test_objective_2()
+            from agentic.obj2_importance.trainer import run_training_pipeline
+            run_training_pipeline("TSLA")
 
         output = f.getvalue()
-        return jsonify({"success": True, "output": output})
+
+        # Reload model after training
+        from agentic.obj2_importance.inference import load_model, get_model_info
+        load_model(os.path.join(project_root, "models", "importance_clf.pkl"))
+        info = get_model_info()
+
+        return jsonify({"success": True, "output": output, "model_info": info})
     except Exception as e:
         return jsonify({"success": False, "error": str(e), "traceback": traceback.format_exc()})
 
@@ -176,11 +200,11 @@ def test_obj3():
         return jsonify({"success": False, "error": str(e), "traceback": traceback.format_exc()})
 
 
-@app.route("/api/correlation-matrix", methods=["POST"])
+@app.route("/api/correlation-matrix", methods=["POST", "GET"])
 def correlation_matrix():
     """Compute and return the correlation matrix."""
     try:
-        data = request.json or {}
+        data = request.get_json(silent=True) or {}
         tickers_str = data.get("tickers", os.getenv("PORTFOLIO_TICKERS", "TSLA,NVDA,MSFT,AMZN,NFLX"))
 
         if isinstance(tickers_str, str):
@@ -210,11 +234,11 @@ def correlation_matrix():
         return jsonify({"success": False, "error": str(e), "traceback": traceback.format_exc()})
 
 
-@app.route("/api/test-guard", methods=["POST"])
+@app.route("/api/test-guard", methods=["POST", "GET"])
 def test_guard():
     """Test the concentration guard with mock decisions."""
     try:
-        data = request.json or {}
+        data = request.get_json(silent=True) or {}
         import pandas as pd
         from agentic.obj3_correlation.guard import apply_concentration_guard, get_guard_summary
 
@@ -339,6 +363,97 @@ def get_ablation_results():
         return jsonify({"success": True, "results": all_results})
     except Exception as e:
         return jsonify({"success": False, "error": str(e), "traceback": traceback.format_exc()})
+
+
+# ── Objective 1 Endpoints ─────────────────────────────────────────────────
+
+@app.route("/api/regime-classify", methods=["POST"])
+def regime_classify():
+    """Classify market regime for a given ticker using both classifiers."""
+    try:
+        data = request.json or {}
+        ticker = data.get("ticker", "TSLA")
+
+        import yfinance as yf
+        import numpy as np
+        from agentic.obj1_regime.classifier import get_classifier
+
+        price_data = yf.download(ticker, period="60d", progress=False)
+        if price_data.empty:
+            return jsonify({"success": False, "error": f"No price data for {ticker}"})
+
+        returns = price_data['Close'].pct_change().dropna().values.flatten()
+        vol = float(np.std(returns[-20:]))
+        ret = float(np.mean(returns[-20:]))
+        features = {"volatility": vol, "return": ret}
+
+        # Threshold classifier
+        tc = get_classifier("threshold")
+        t_regime = tc.predict(features)
+        t_probs = tc.predict_proba(features)
+
+        # HMM classifier
+        hc = get_classifier("hmm")
+        h_regime = hc.predict(features)
+        h_probs = hc.predict_proba(features)
+
+        # Adaptive Q values based on regime
+        q_map = {
+            "BULL": {"shallow": 10, "intermediate": 60, "deep": 240},
+            "SIDEWAYS": {"shallow": 5, "intermediate": 45, "deep": 180},
+            "CRISIS": {"shallow": 2, "intermediate": 20, "deep": 90},
+        }
+
+        return jsonify({
+            "success": True,
+            "ticker": ticker,
+            "features": {"volatility_20d": round(vol, 6), "mean_return_20d": round(ret, 6)},
+            "threshold": {"regime": t_regime, "probabilities": {k: round(v, 4) for k, v in t_probs.items()}},
+            "hmm": {"regime": h_regime, "probabilities": {k: round(v, 4) for k, v in h_probs.items()}},
+            "adaptive_q": q_map.get(h_regime, q_map["SIDEWAYS"]),
+        })
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e), "traceback": traceback.format_exc()})
+
+
+# ── Objective 4 Endpoints ─────────────────────────────────────────────────
+
+@app.route("/api/obj4-info", methods=["GET"])
+def obj4_info():
+    """Get Obj4 multi-agent pipeline information."""
+    try:
+        from agentic.obj4_multiagent.graph import build_graph
+        g = build_graph()
+        nodes = list(g.nodes)
+
+        agent_models = {
+            "fundamental": os.getenv("FUNDAMENTAL_MODEL", "N/A"),
+            "sentiment": os.getenv("SENTIMENT_MODEL", "N/A"),
+            "technical": os.getenv("TECHNICAL_MODEL", "N/A"),
+            "regime": os.getenv("REGIME_MODEL", "N/A"),
+            "debate": os.getenv("DEBATE_MODEL", "N/A"),
+            "portfolio": os.getenv("PORTFOLIO_MODEL", "N/A"),
+        }
+
+        return jsonify({
+            "success": True,
+            "nodes": nodes,
+            "node_count": len(nodes),
+            "pipeline": [
+                {"step": 1, "node": "regime_node_agent", "description": "Classifies market regime (BULL/SIDEWAYS/CRISIS)"},
+                {"step": 2, "node": "fundamental", "description": "Analyzes long-term & mid-term memories for value signals"},
+                {"step": 2, "node": "sentiment", "description": "Analyzes short-term memories for market mood"},
+                {"step": 2, "node": "technical", "description": "Analyzes price history for momentum & patterns"},
+                {"step": 3, "node": "debate", "description": "Bull vs Bear structured debate (2 rounds)"},
+                {"step": 4, "node": "risk", "description": "Risk manager applies regime-adjusted confidence"},
+                {"step": 5, "node": "final", "description": "Portfolio manager makes final BUY/HOLD/SELL decision"},
+            ],
+            "agent_models": agent_models,
+            "debate_rounds": int(os.getenv("DEBATE_ROUNDS", "2")),
+        })
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e), "traceback": traceback.format_exc()})
+
 
 
 if __name__ == "__main__":

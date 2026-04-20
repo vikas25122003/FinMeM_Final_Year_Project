@@ -178,16 +178,16 @@ def parse_simulation_output(output: str) -> dict:
     return metrics
 
 
-def build_cmd(script: str, mode: str, ckp_name: str, ticker: str = TICKER) -> list:
+def build_cmd(script: str, mode: str, ckp_name: str, train_start, train_end, test_start, test_end, ticker: str = TICKER) -> list:
     """Build the subprocess command for the given script and mode."""
     ckp_path = os.path.join(CHECKPOINT_DIR, f"{ticker}_{ckp_name}")
 
     if mode == "train":
-        start, end = TRAIN_START, TRAIN_END
+        start, end = train_start, train_end
         extra = ["--save-checkpoint", ckp_path]
         dataset = TRAIN_DATASET
     else:
-        start, end = TEST_START, TEST_END
+        start, end = test_start, test_end
         extra = ["--checkpoint", ckp_path]
         dataset = TEST_DATASET
 
@@ -211,7 +211,7 @@ def build_cmd(script: str, mode: str, ckp_name: str, ticker: str = TICKER) -> li
     return cmd
 
 
-def run_single_config(cfg: dict, skip_train: bool = False) -> dict:
+def run_single_config(cfg: dict, skip_train: bool, train_start: str, train_end: str, test_start: str, test_end: str) -> dict:
     """Run a single configuration (train + test) and return parsed metrics."""
     name = cfg["name"]
     script = cfg["script"]
@@ -231,10 +231,10 @@ def run_single_config(cfg: dict, skip_train: bool = False) -> dict:
     if not skip_train:
         print(f"\n{'─'*60}")
         print(f"  🏋️ TRAIN: {name} ({script})")
-        print(f"  Period: {TRAIN_START} → {TRAIN_END}")
+        print(f"  Period: {train_start} → {train_end}")
         print(f"{'─'*60}")
 
-        cmd = build_cmd(script, "train", ckp_name)
+        cmd = build_cmd(script, "train", ckp_name, train_start, train_end, test_start, test_end)
         try:
             proc = subprocess.run(
                 cmd, env=run_env,
@@ -261,10 +261,10 @@ def run_single_config(cfg: dict, skip_train: bool = False) -> dict:
     # ── Phase 2: Test ──
     print(f"\n{'─'*60}")
     print(f"  🧪 TEST:  {name} ({script})")
-    print(f"  Period: {TEST_START} → {TEST_END}")
+    print(f"  Period: {test_start} → {test_end}")
     print(f"{'─'*60}")
 
-    cmd = build_cmd(script, "test", ckp_name)
+    cmd = build_cmd(script, "test", ckp_name, train_start, train_end, test_start, test_end)
     try:
         proc = subprocess.run(
             cmd, env=run_env,
@@ -381,7 +381,7 @@ def main():
         # Run all configs in parallel
         with ProcessPoolExecutor(max_workers=len(configs)) as executor:
             futures = {
-                executor.submit(run_single_config, cfg, args.skip_train): cfg
+                executor.submit(run_single_config, cfg, args.skip_train, TRAIN_START, TRAIN_END, TEST_START, TEST_END): cfg
                 for cfg in configs
             }
             for future in as_completed(futures):
@@ -397,7 +397,7 @@ def main():
     else:
         # Run sequentially
         for cfg in configs:
-            result = run_single_config(cfg, args.skip_train)
+            result = run_single_config(cfg, args.skip_train, TRAIN_START, TRAIN_END, TEST_START, TEST_END)
             results.append(result)
 
     elapsed = time.time() - start_time

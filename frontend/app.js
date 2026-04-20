@@ -479,6 +479,150 @@ function renderAblationTable() {
     tbody.innerHTML = html;
 }
 
+// ── Objective 1: Regime Classification ──────────────────────────────────
+
+async function classifyRegime() {
+    setLoading('btn-classify-regime', true);
+    const ticker = document.getElementById('regime-ticker').value;
+    const container = document.getElementById('regime-results');
+
+    try {
+        const data = await apiCall('/api/regime-classify', 'POST', { ticker });
+
+        if (!data.success) {
+            container.innerHTML = `<div class="output-console" style="color:var(--accent-rose);">Error: ${data.error}</div>`;
+            return;
+        }
+
+        const regimeColors = { BULL: '#4ade80', SIDEWAYS: '#fbbf24', CRISIS: '#f87171' };
+        const regimeEmoji = { BULL: '🟢', SIDEWAYS: '🟡', CRISIS: '🔴' };
+        const hRegime = data.hmm.regime;
+        const tRegime = data.threshold.regime;
+
+        let probBars = '';
+        for (const [regime, prob] of Object.entries(data.hmm.probabilities)) {
+            const pct = (prob * 100).toFixed(1);
+            probBars += `
+                <div style="display:flex; align-items:center; margin:4px 0; gap:8px;">
+                    <span style="width:80px; font-size:13px; color:${regimeColors[regime]}; font-weight:600;">${regime}</span>
+                    <div style="flex:1; height:20px; background:var(--glass-bg); border-radius:10px; overflow:hidden;">
+                        <div style="width:${pct}%; height:100%; background:${regimeColors[regime]}; border-radius:10px; transition:width 0.5s;"></div>
+                    </div>
+                    <span style="width:50px; text-align:right; font-family:'JetBrains Mono',monospace; font-size:13px;">${pct}%</span>
+                </div>`;
+        }
+
+        container.innerHTML = `
+            <div style="background:var(--glass-bg); border-radius:12px; padding:20px; border:1px solid var(--border);">
+                <div style="text-align:center; margin-bottom:16px;">
+                    <div style="font-size:48px;">${regimeEmoji[hRegime]}</div>
+                    <div style="font-size:24px; font-weight:700; color:${regimeColors[hRegime]}; margin-top:4px;">${hRegime}</div>
+                    <div style="font-size:13px; color:var(--text-muted);">HMM Classification for ${ticker}</div>
+                </div>
+                <div style="margin-bottom:16px;">
+                    <div style="font-size:13px; color:var(--text-muted); margin-bottom:8px; font-weight:600;">Regime Probabilities (HMM)</div>
+                    ${probBars}
+                </div>
+                <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px; margin-top:12px;">
+                    <div style="background:var(--card-bg); padding:12px; border-radius:8px; border:1px solid var(--border);">
+                        <div style="font-size:12px; color:var(--text-muted);">Threshold Result</div>
+                        <div style="font-size:16px; font-weight:600; color:${regimeColors[tRegime]};">${tRegime}</div>
+                    </div>
+                    <div style="background:var(--card-bg); padding:12px; border-radius:8px; border:1px solid var(--border);">
+                        <div style="font-size:12px; color:var(--text-muted);">20d Volatility</div>
+                        <div style="font-size:16px; font-weight:600;">${data.features.volatility_20d.toFixed(4)}</div>
+                    </div>
+                </div>
+                <div style="margin-top:12px; background:var(--card-bg); padding:12px; border-radius:8px; border:1px solid var(--border);">
+                    <div style="font-size:12px; color:var(--text-muted); margin-bottom:4px;">Adaptive Q-Values (memory decay)</div>
+                    <div style="display:flex; gap:16px; font-family:'JetBrains Mono',monospace; font-size:14px;">
+                        <span>Shallow: <strong>${data.adaptive_q.shallow}</strong></span>
+                        <span>Mid: <strong>${data.adaptive_q.intermediate}</strong></span>
+                        <span>Deep: <strong>${data.adaptive_q.deep}</strong></span>
+                    </div>
+                </div>
+            </div>`;
+    } catch (e) {
+        container.innerHTML = `<div class="output-console" style="color:var(--accent-rose);">${e.message}</div>`;
+    } finally {
+        setLoading('btn-classify-regime', false);
+    }
+}
+
+// ── Objective 4: Multi-Agent Pipeline ───────────────────────────────────
+
+async function loadObj4Info() {
+    setLoading('btn-load-obj4', true);
+    const container = document.getElementById('obj4-pipeline');
+
+    try {
+        const data = await apiCall('/api/obj4-info');
+
+        if (!data.success) {
+            container.innerHTML = `<div class="output-console" style="color:var(--accent-rose);">Error: ${data.error}</div>`;
+            return;
+        }
+
+        const stepColors = {
+            1: '#818cf8', // Regime
+            2: '#4ade80', // Specialists
+            3: '#fbbf24', // Debate
+            4: '#f87171', // Risk
+            5: '#06b6d4', // Final
+        };
+        const stepIcons = {
+            'regime_node_agent': '📊', 'fundamental': '📋', 'sentiment': '💬',
+            'technical': '📈', 'debate': '⚔️', 'risk': '🛡️', 'final': '🎯'
+        };
+
+        let pipelineHtml = '<div style="display:flex; flex-direction:column; gap:8px;">';
+
+        data.pipeline.forEach((p, i) => {
+            const color = stepColors[p.step] || '#888';
+            const icon = stepIcons[p.node] || '▶';
+            const model = data.agent_models[p.node.replace('_node_agent', '')] || '';
+
+            pipelineHtml += `
+                <div style="display:flex; align-items:center; gap:12px; padding:14px 16px; background:var(--glass-bg); border-radius:10px; border-left:4px solid ${color};">
+                    <div style="font-size:24px; min-width:32px; text-align:center;">${icon}</div>
+                    <div style="flex:1;">
+                        <div style="font-weight:600; color:${color}; text-transform:uppercase; font-size:12px; letter-spacing:0.5px;">Step ${p.step}: ${p.node}</div>
+                        <div style="font-size:14px; color:var(--text-secondary); margin-top:2px;">${p.description}</div>
+                        ${model ? `<div style="font-size:12px; color:var(--text-muted); margin-top:2px; font-family:'JetBrains Mono',monospace;">Model: ${model}</div>` : ''}
+                    </div>
+                </div>`;
+
+            // Arrow between steps (except parallel ones)
+            if (i < data.pipeline.length - 1 && data.pipeline[i + 1].step !== p.step) {
+                pipelineHtml += '<div style="text-align:center; color:var(--text-muted); font-size:18px;">↓</div>';
+            }
+        });
+
+        pipelineHtml += '</div>';
+
+        container.innerHTML = `
+            <div style="display:grid; grid-template-columns: 1fr 1fr 1fr; gap:12px; margin-bottom:16px;">
+                <div style="background:var(--glass-bg); padding:16px; border-radius:10px; text-align:center; border:1px solid var(--border);">
+                    <div style="font-size:28px; font-weight:700; color:var(--accent-purple);">${data.node_count}</div>
+                    <div style="font-size:13px; color:var(--text-muted);">Graph Nodes</div>
+                </div>
+                <div style="background:var(--glass-bg); padding:16px; border-radius:10px; text-align:center; border:1px solid var(--border);">
+                    <div style="font-size:28px; font-weight:700; color:var(--accent-amber);">${data.debate_rounds}</div>
+                    <div style="font-size:13px; color:var(--text-muted);">Debate Rounds</div>
+                </div>
+                <div style="background:var(--glass-bg); padding:16px; border-radius:10px; text-align:center; border:1px solid var(--border);">
+                    <div style="font-size:28px; font-weight:700; color:var(--accent-emerald);">4</div>
+                    <div style="font-size:13px; color:var(--text-muted);">Specialist Agents</div>
+                </div>
+            </div>
+            ${pipelineHtml}`;
+    } catch (e) {
+        container.innerHTML = `<div class="output-console" style="color:var(--accent-rose);">${e.message}</div>`;
+    } finally {
+        setLoading('btn-load-obj4', false);
+    }
+}
+
 // ── Init ─────────────────────────────────────────────────────────────────
 
 document.addEventListener('DOMContentLoaded', () => {

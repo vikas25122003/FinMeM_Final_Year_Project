@@ -43,16 +43,21 @@ logger = logging.getLogger(__name__)
 # ── LLM Helpers ─────────────────────────────────────────────────────────
 
 def _get_bedrock_llm(model_env_var: str, fallback_model: str, temperature: float = 0.3):
-    """Create a ChatBedrock instance from env var model ID."""
-    from langchain_aws import ChatBedrock
+    """Create a ChatBedrockConverse instance from env var model ID.
+    
+    Uses the Converse API which supports all Bedrock models including
+    Kimi K2.5, DeepSeek R1, Claude, Nova, etc.
+    """
+    from langchain_aws import ChatBedrockConverse
 
     model_id = os.getenv(model_env_var, fallback_model)
     region = os.getenv("AWS_REGION", "us-east-1")
 
-    return ChatBedrock(
+    return ChatBedrockConverse(
         model_id=model_id,
         region_name=region,
-        model_kwargs={"max_tokens": 2000, "temperature": temperature},
+        max_tokens=2000,
+        temperature=temperature,
     )
 
 

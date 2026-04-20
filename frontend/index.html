@@ -30,25 +30,34 @@
                 <span class="status-badge inactive" id="badge-obj3">
                     <span class="status-dot"></span> Obj3: Cross-Ticker
                 </span>
+                <span class="status-badge inactive" id="badge-obj4">
+                    <span class="status-dot"></span> Obj4: Multi-Agent
+                </span>
             </div>
         </header>
 
         <!-- ── Navigation ──────────────────────────────── -->
         <nav class="nav-tabs" id="nav-tabs">
             <button class="nav-tab active" data-tab="dashboard" id="tab-dashboard">
-                <span class="tab-icon">📊</span> Dashboard
+                <span class="tab-icon">📊</span> Overview
+            </button>
+            <button class="nav-tab" data-tab="obj1" id="tab-obj1">
+                <span class="tab-icon">📈</span> Obj 1: Regime
             </button>
             <button class="nav-tab" data-tab="obj2" id="tab-obj2">
-                <span class="tab-icon">🧪</span> Objective 2
+                <span class="tab-icon">🧪</span> Obj 2: Importance
             </button>
             <button class="nav-tab" data-tab="obj3" id="tab-obj3">
-                <span class="tab-icon">🔗</span> Objective 3
+                <span class="tab-icon">🔗</span> Obj 3: Cross-Ticker
             </button>
-            <button class="nav-tab" data-tab="simulation" id="tab-simulation">
-                <span class="tab-icon">🚀</span> Simulation
+            <button class="nav-tab" data-tab="obj4" id="tab-obj4">
+                <span class="tab-icon">🤖</span> Obj 4: Multi-Agent
             </button>
             <button class="nav-tab" data-tab="ablation" id="tab-ablation">
-                <span class="tab-icon">🏆</span> Ablation Run
+                <span class="tab-icon">🏆</span> Ablation
+            </button>
+            <button class="nav-tab" data-tab="simulation" id="tab-simulation">
+                <span class="tab-icon">🚀</span> Live Sim
             </button>
         </nav>
 
@@ -139,6 +148,89 @@
         </div>
 
         <!-- ═══════════════════════════════════════════════
+             TAB: OBJECTIVE 1 — REGIME CLASSIFICATION
+             ═══════════════════════════════════════════════ -->
+        <div class="tab-panel" id="panel-obj1">
+            <div class="info-banner">
+                <span class="info-icon">📈</span>
+                <div>
+                    <strong>Objective 1: Regime-Conditioned Adaptive Memory Decay</strong><br>
+                    Replaces FinMEM's fixed memory decay Q-values with a Hidden Markov Model that classifies
+                    the market into BULL, SIDEWAYS, or CRISIS regimes. Memory time horizons dynamically
+                    adjust — in CRISIS, the agent focuses on recent memories (shorter decay); in BULL, it
+                    draws from deeper historical context.
+                </div>
+            </div>
+
+            <div class="grid-2">
+                <!-- Live Regime Classification -->
+                <div class="card">
+                    <div class="card-header">
+                        <div class="card-title"><span class="icon">🎯</span> Live Regime Classification</div>
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">Select Ticker</label>
+                        <select class="form-select" id="regime-ticker">
+                            <option value="TSLA">TSLA — Tesla</option>
+                            <option value="NVDA">NVDA — NVIDIA</option>
+                            <option value="MSFT">MSFT — Microsoft</option>
+                            <option value="AMZN">AMZN — Amazon</option>
+                            <option value="AAPL">AAPL — Apple</option>
+                            <option value="NFLX">NFLX — Netflix</option>
+                        </select>
+                    </div>
+                    <button class="btn btn-primary" id="btn-classify-regime" onclick="classifyRegime()" style="width:100%; margin-top:8px;">
+                        <span class="spinner"></span>
+                        <span class="btn-text">🔍 Classify Current Regime</span>
+                    </button>
+                    <div id="regime-results" style="margin-top: 16px;"></div>
+                </div>
+
+                <!-- Q-Value Explanation -->
+                <div class="card">
+                    <div class="card-header">
+                        <div class="card-title"><span class="icon">🔬</span> How Adaptive Q Works</div>
+                    </div>
+                    <div style="font-size: 14px; color: var(--text-secondary); line-height: 1.7;">
+                        <p><strong>Original FinMEM:</strong> Fixed Q values (5, 45, 180 days) regardless of market conditions.</p>
+                        <p><strong>Our Enhancement:</strong> Q values adapt based on detected regime:</p>
+                        <table style="width:100%; margin: 12px 0; border-collapse: collapse;">
+                            <thead>
+                                <tr style="border-bottom: 1px solid var(--border);">
+                                    <th style="padding: 8px; text-align: left; color: var(--text-muted);">Regime</th>
+                                    <th style="padding: 8px; text-align: center; color: var(--text-muted);">Shallow</th>
+                                    <th style="padding: 8px; text-align: center; color: var(--text-muted);">Medium</th>
+                                    <th style="padding: 8px; text-align: center; color: var(--text-muted);">Deep</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <tr style="border-bottom: 1px solid var(--border);">
+                                    <td style="padding: 8px; color: #4ade80; font-weight: 600;">🟢 BULL</td>
+                                    <td style="padding: 8px; text-align: center;">10</td>
+                                    <td style="padding: 8px; text-align: center;">60</td>
+                                    <td style="padding: 8px; text-align: center;">240</td>
+                                </tr>
+                                <tr style="border-bottom: 1px solid var(--border);">
+                                    <td style="padding: 8px; color: #fbbf24; font-weight: 600;">🟡 SIDEWAYS</td>
+                                    <td style="padding: 8px; text-align: center;">5</td>
+                                    <td style="padding: 8px; text-align: center;">45</td>
+                                    <td style="padding: 8px; text-align: center;">180</td>
+                                </tr>
+                                <tr>
+                                    <td style="padding: 8px; color: #f87171; font-weight: 600;">🔴 CRISIS</td>
+                                    <td style="padding: 8px; text-align: center;">2</td>
+                                    <td style="padding: 8px; text-align: center;">20</td>
+                                    <td style="padding: 8px; text-align: center;">90</td>
+                                </tr>
+                            </tbody>
+                        </table>
+                        <p style="font-size: 13px; color: var(--text-muted);">In CRISIS, shorter decay means the agent relies on very recent memories — it reacts faster to rapidly changing conditions.</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- ═══════════════════════════════════════════════
              TAB 2: OBJECTIVE 2
              ═══════════════════════════════════════════════ -->
         <div class="tab-panel" id="panel-obj2">
@@ -156,14 +248,14 @@
                 <!-- Test Panel -->
                 <div class="card">
                     <div class="card-header">
-                        <div class="card-title"><span class="icon">🧪</span> Run Test</div>
+                        <div class="card-title"><span class="icon">🧪</span> Train Classifier</div>
                     </div>
                     <p style="color: var(--text-secondary); font-size: 13px; margin-bottom: 16px;">
-                        End-to-end test: creates fake reflections → builds features → trains classifier → inference check.
+                        Trains LogisticRegression on 522 real reflection logs from TSLA trading history → builds features → saves model.
                     </p>
                     <button class="btn btn-primary" id="btn-test-obj2" onclick="testObj2()">
                         <span class="spinner"></span>
-                        <span class="btn-text">▶ Run Objective 2 Test</span>
+                        <span class="btn-text">▶ Train on Real Reflections</span>
                     </button>
                     <div class="output-console" id="output-obj2" style="margin-top: 16px;"></div>
                 </div>
@@ -411,7 +503,34 @@
         </div>
 
         <!-- ═══════════════════════════════════════════════
-             TAB 5: ABLATION RUN
+             TAB: OBJECTIVE 4 — MULTI-AGENT
+             ═══════════════════════════════════════════════ -->
+        <div class="tab-panel" id="panel-obj4">
+            <div class="info-banner">
+                <span class="info-icon">🤖</span>
+                <div>
+                    <strong>Objective 4: Multi-Agent Trading Architecture (LangGraph)</strong><br>
+                    Extends FinMEM from a single-agent system to a multi-agent debate pipeline.
+                    Four specialist agents (Fundamental, Sentiment, Technical, Regime) analyze FinMEM's
+                    layered memories, then engage in a structured Bull vs Bear debate. A Risk Manager
+                    applies regime-adjusted confidence, and a Portfolio Manager makes the final decision.
+                </div>
+            </div>
+
+            <div class="card">
+                <div class="card-header">
+                    <div class="card-title"><span class="icon">🔄</span> Pipeline Architecture</div>
+                    <button class="btn btn-primary" id="btn-load-obj4" onclick="loadObj4Info()">
+                        <span class="spinner"></span>
+                        <span class="btn-text">🔍 Load Pipeline Info</span>
+                    </button>
+                </div>
+                <div id="obj4-pipeline" style="margin-top: 16px;"></div>
+            </div>
+        </div>
+
+        <!-- ═══════════════════════════════════════════════
+             TAB: ABLATION RUN
              ═══════════════════════════════════════════════ -->
         <div class="tab-panel" id="panel-ablation">
             <div class="info-banner">

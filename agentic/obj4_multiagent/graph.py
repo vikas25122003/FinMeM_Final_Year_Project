@@ -68,7 +68,7 @@ def build_graph() -> StateGraph:
     g = StateGraph(AgentState)
 
     # ── Add all 7 nodes ──────────────────────────────────────
-    g.add_node("regime", regime_node)
+    g.add_node("regime_node_agent", regime_node)
     g.add_node("fundamental", fundamental_node)
     g.add_node("sentiment", sentiment_node)
     g.add_node("technical", technical_node)
@@ -79,12 +79,12 @@ def build_graph() -> StateGraph:
     # ── Wire the edges ───────────────────────────────────────
 
     # Step 1: Start → Regime (always first)
-    g.add_edge(START, "regime")
+    g.add_edge(START, "regime_node_agent")
 
     # Step 2: Regime → 3 specialists (fan-out for parallel execution)
-    g.add_edge("regime", "fundamental")
-    g.add_edge("regime", "sentiment")
-    g.add_edge("regime", "technical")
+    g.add_edge("regime_node_agent", "fundamental")
+    g.add_edge("regime_node_agent", "sentiment")
+    g.add_edge("regime_node_agent", "technical")
 
     # Step 3: All 3 specialists → Debate (fan-in: waits for all 3)
     g.add_edge("fundamental", "debate")
