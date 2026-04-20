@@ -108,13 +108,20 @@ async function loadStatus() {
 async function testObj2() {
     setLoading('btn-test-obj2', true);
     const output = document.getElementById('output-obj2');
-    output.textContent = 'Running Objective 2 test...\n';
+    const ticker = document.getElementById('obj2-train-ticker')?.value || 'TSLA';
+    output.textContent = `Training on ${ticker} reflection logs...\n`;
     output.classList.remove('error');
 
     try {
-        const data = await apiCall('/api/test-obj2', 'POST');
+        const data = await apiCall('/api/test-obj2', 'POST', { ticker });
         if (data.success) {
             output.textContent = data.output;
+            // Show nice summary if model_info available
+            if (data.model_info && data.model_info.loaded) {
+                const info = data.model_info;
+                const accPct = (info.accuracy * 100).toFixed(1);
+                output.textContent += `\n✅ Model trained on ${ticker} — Accuracy: ${accPct}%`;
+            }
         } else {
             output.textContent = `❌ Error: ${data.error}\n\n${data.traceback || ''}`;
             output.classList.add('error');

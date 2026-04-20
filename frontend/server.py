@@ -32,11 +32,14 @@ CORS(app)
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(name)s] %(levelname)s: %(message)s")
 logger = logging.getLogger("finmem-ui")
 
-# ── CRITICAL: Change CWD to project root so all relative paths work ────────
-# The server may be launched from frontend/ but all paths (models/, logs/) are
-# relative to the project root. This fixes HMM and reflection log loading.
-os.chdir(project_root)
-logger.info(f"[Startup] Working directory set to: {project_root}")
+# ── CRITICAL: Set absolute paths for all data/model directories ──────────
+# Instead of changing the CWD (which breaks the Flask reloader), we set
+# environment variables with absolute paths. This ensures all modules
+# (Obj1, Obj2, etc.) can find their files regardless of where the server starts.
+os.environ["REFLECTION_LOG_DIR"] = os.path.join(project_root, "logs", "reflections")
+os.environ["HMM_MODEL_PATH"] = os.path.join(project_root, "models", "hmm_regime.pkl")
+os.environ["IMPORTANCE_MODEL_PATH"] = os.path.join(project_root, "models", "importance_clf.pkl")
+logger.info(f"[Startup] Environment paths set relative to: {project_root}")
 
 # Load importance model on startup
 try:
@@ -100,15 +103,18 @@ def system_status():
 
 @app.route("/api/test-obj2", methods=["POST"])
 def test_obj2():
-    """Train Obj2 importance classifier on REAL reflection logs."""
+    """Train Obj2 importance classifier on REAL reflection logs for selected ticker."""
     try:
+        data = request.get_json(silent=True) or {}
+        ticker = data.get("ticker", "TSLA").upper()
+        
         import io
         from contextlib import redirect_stdout
 
         f = io.StringIO()
         with redirect_stdout(f):
             from agentic.obj2_importance.trainer import run_training_pipeline
-            run_training_pipeline("TSLA")
+            run_training_pipeline(ticker)
 
         output = f.getvalue()
 
@@ -385,7 +391,17 @@ def regime_classify():
         returns = price_data['Close'].pct_change().dropna().values.flatten()
         vol = float(np.std(returns[-20:]))
         ret = float(np.mean(returns[-20:]))
-        features = {"volatility": vol, "return": ret}
+        
+        # For HMM we specifically need the sequence of log returns
+        close = price_data['Close'].values.flatten()
+        log_returns = np.log(close[1:] / close[:-1])
+        returns_seq = log_returns.tolist()
+        
+        features = {
+            "volatility": vol, 
+            "return": ret,
+            "returns_seq": returns_seq
+        }
 
         # Threshold classifier
         tc = get_classifier("threshold")

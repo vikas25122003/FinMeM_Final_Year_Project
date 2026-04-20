@@ -292,6 +292,22 @@ class MemoryDB:
 
         return ret_texts, ret_ids
 
+    def get_memory_objects_by_ids(self, symbol: str, ids: List[int]) -> List[Dict[str, Any]]:
+        """Retrieve full memory objects for given IDs.
+        
+        Args:
+            symbol: Stock ticker.
+            ids: List of memory IDs.
+            
+        Returns:
+            List of memory record dictionaries.
+        """
+        if symbol not in self.universe:
+            return []
+        records = self.universe[symbol]["score_memory"]
+        id_set = set(ids)
+        return [r for r in records if r["id"] in id_set]
+
     def update_access_count_with_feedback(
         self,
         symbol: str,
@@ -767,6 +783,35 @@ class BrainDB:
         """Query reflection memory."""
         emb = self._embed(query_text)
         return self.reflection_memory.query(emb, top_k, symbol)
+
+    def get_memories_by_ids(self, symbol: str, ids: List[int]) -> List[Dict[str, Any]]:
+        """Retrieve full memory objects for given IDs across all layers.
+        
+        Used for importance training (Objective 2) to get real metadata.
+        
+        Args:
+            symbol: Stock ticker.
+            ids: List of memory IDs.
+            
+        Returns:
+            List of memory record dictionaries.
+        """
+        results = []
+        remaining_ids = set(ids)
+        layers = [
+            self.short_term_memory,
+            self.mid_term_memory,
+            self.long_term_memory,
+            self.reflection_memory,
+        ]
+        for layer in layers:
+            if not remaining_ids:
+                break
+            found = layer.get_memory_objects_by_ids(symbol, list(remaining_ids))
+            results.extend(found)
+            found_ids = {r["id"] for r in found}
+            remaining_ids -= found_ids
+        return results
 
     # ── Access counter feedback ──
 

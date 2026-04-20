@@ -250,9 +250,26 @@
                     <div class="card-header">
                         <div class="card-title"><span class="icon">🧪</span> Train Classifier</div>
                     </div>
-                    <p style="color: var(--text-secondary); font-size: 13px; margin-bottom: 16px;">
-                        Trains LogisticRegression on 522 real reflection logs from TSLA trading history → builds features → saves model.
+                    <p style="color: var(--text-secondary); font-size: 13px; margin-bottom: 12px;">
+                        Trains LogisticRegression on <strong>real reflection logs</strong> from a simulation run. Each simulation day auto-writes a log. Pick a ticker that has been simulated.
                     </p>
+
+                    <div class="form-group">
+                        <label class="form-label">Train on reflections from:</label>
+                        <select class="form-select" id="obj2-train-ticker">
+                            <option value="TSLA">TSLA — Tesla (522 logs ✅)</option>
+                            <option value="MSFT">MSFT — Microsoft (65 logs ✅)</option>
+                            <option value="NVDA">NVDA — NVIDIA (run simulation first)</option>
+                            <option value="AMZN">AMZN — Amazon (run simulation first)</option>
+                            <option value="AAPL">AAPL — Apple (run simulation first)</option>
+                        </select>
+                    </div>
+
+                    <div style="background:var(--glass-bg); border-radius:8px; padding:10px 12px; margin-bottom:12px; font-size:12px; color:var(--text-muted); border-left:3px solid var(--accent-cyan);">
+                        💡 More simulation data = better classifier. TSLA has the most logs (522 = ~2 years of training).
+                        MSFT has 65. Others need a simulation run first.
+                    </div>
+
                     <button class="btn btn-primary" id="btn-test-obj2" onclick="testObj2()">
                         <span class="spinner"></span>
                         <span class="btn-text">▶ Train on Real Reflections</span>

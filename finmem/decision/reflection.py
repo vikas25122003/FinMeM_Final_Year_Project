@@ -272,6 +272,47 @@ def _apply_promotion_bonus(
         logger.info(f"[{symbol}] Boosted {boosted} pivotal memories (+0.05 importance)")
 
 
+def _calculate_memory_metadata(mem_objects: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """Calculate mean features for a set of retrieved memories."""
+    if not mem_objects:
+        return {
+            "avg_age": 1.0,
+            "avg_access": 1.0,
+            "avg_length": 200.0,
+            "avg_sentiment": 0.0,
+        }
+
+    valid_mems = [m for m in mem_objects if m]
+    if not valid_mems:
+        return {}
+
+    avg_age = sum(m.get("delta", 0) for m in valid_mems) / len(valid_mems)
+    avg_access = sum(m.get("access_counter", 0) for m in valid_mems) / len(valid_mems)
+    avg_length = sum(len(m.get("text", "")) for m in valid_mems) / len(valid_mems)
+
+    # Simple sentiment logic consistent with trainer
+    pos_words = {"rally", "surge", "profit", "gain", "green", "bull", "up", "higher", "beat", "exceed", "strong", "growth", "buy"}
+    neg_words = {"crash", "plunge", "loss", "red", "bear", "down", "lower", "miss", "weak", "decline", "sell", "fear"}
+
+    total_sent = 0.0
+    for m in valid_mems:
+        text = m.get("text", "").lower()
+        words = set(text.split())
+        p = len(words & pos_words)
+        n = len(words & neg_words)
+        if (p + n) > 0:
+            total_sent += (p - n) / (p + n)
+    
+    avg_sentiment = total_sent / len(valid_mems)
+
+    return {
+        "avg_age": float(avg_age),
+        "avg_access": float(avg_access),
+        "avg_length": float(avg_length),
+        "avg_sentiment": float(avg_sentiment),
+    }
+
+
 def trading_reflection(
     cur_date: Union[date, datetime],
     symbol: str,
@@ -408,18 +449,25 @@ def trading_reflection(
     if _os2.getenv("LEARNED_IMPORTANCE", "false").lower() == "true":
         try:
             from agentic.obj2_importance.logger import log_reflection
+            
+            # Extract real metadata for retrieved memories
+            used_ids = (
+                result.get("short_memory_ids", []) +
+                result.get("mid_memory_ids", []) +
+                result.get("long_memory_ids", []) +
+                result.get("reflection_memory_ids", [])
+            )
+            mem_objs = brain.get_memories_by_ids(symbol, used_ids)
+            metadata = _calculate_memory_metadata(mem_objs)
+
             log_reflection(
                 date=str(cur_date),
                 ticker=symbol,
                 decision=result.get("investment_decision", "hold"),
-                memory_ids_used=(
-                    result.get("short_memory_ids", []) +
-                    result.get("mid_memory_ids", []) +
-                    result.get("long_memory_ids", []) +
-                    result.get("reflection_memory_ids", [])
-                ),
+                memory_ids_used=used_ids,
                 rationale=result.get("summary_reason", ""),
                 cumulative_return=0.0,
+                metadata=metadata,
             )
         except Exception as e:
             logger.warning(f"[Obj2] Reflection logging failed: {e}")

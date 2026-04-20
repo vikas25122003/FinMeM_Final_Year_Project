@@ -32,6 +32,7 @@ def log_reflection(
     memory_ids_used: List[int],
     rationale: str,
     cumulative_return: float = 0.0,
+    metadata: Optional[Dict[str, Any]] = None,
     log_dir: Optional[str] = None,
 ) -> None:
     """Append a single reflection record to the daily JSONL file.
@@ -43,6 +44,7 @@ def log_reflection(
         memory_ids_used:   List of memory IDs the LLM used.
         rationale:         LLM's explanation text.
         cumulative_return: Portfolio cumulative return at decision time.
+        metadata:          Optional dict of memory features (age, length, etc).
         log_dir:           Override log directory (default: from env).
     """
     d = _ensure_log_dir(log_dir)
@@ -54,6 +56,7 @@ def log_reflection(
         "memory_ids_used": [int(mid) for mid in (memory_ids_used or [])],
         "rationale": str(rationale)[:2000],  # Cap to 2KB
         "cumulative_return": float(cumulative_return),
+        "metadata": metadata or {},
         "logged_at": datetime.utcnow().isoformat() + "Z",
     }
 
