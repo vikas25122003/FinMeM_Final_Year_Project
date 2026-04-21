@@ -1,0 +1,739 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>FinMEM + TradingAgents — Autonomous Dashboard</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.6/dist/chart.umd.min.js"></script>
+    <style>
+        :root {
+            --bg: #0f1117;
+            --surface: #1a1d27;
+            --surface2: #232734;
+            --border: #2d3244;
+            --text: #e4e6ed;
+            --text-dim: #8b8fa3;
+            --accent: #6366f1;
+            --green: #22c55e;
+            --red: #ef4444;
+            --yellow: #eab308;
+            --blue: #3b82f6;
+        }
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { background: var(--bg); color: var(--text); font-family: 'Inter', -apple-system, sans-serif; }
+
+        .header { background: var(--surface); border-bottom: 1px solid var(--border); padding: 14px 24px; display: flex; align-items: center; justify-content: space-between; }
+        .header h1 { font-size: 18px; font-weight: 600; }
+        .header h1 span { color: var(--accent); }
+        .header .status { display: flex; gap: 12px; align-items: center; }
+        .badge { padding: 4px 10px; border-radius: 12px; font-size: 11px; font-weight: 600; }
+        .badge-green { background: rgba(34,197,94,0.15); color: var(--green); }
+        .badge-red { background: rgba(239,68,68,0.15); color: var(--red); }
+        .badge-yellow { background: rgba(234,179,8,0.15); color: var(--yellow); }
+
+        .tabs { background: var(--surface); border-bottom: 1px solid var(--border); display: flex; padding: 0 24px; overflow-x: auto; }
+        .tab { padding: 12px 18px; cursor: pointer; color: var(--text-dim); font-size: 13px; font-weight: 500; border-bottom: 2px solid transparent; transition: all 0.2s; white-space: nowrap; }
+        .tab:hover { color: var(--text); }
+        .tab.active { color: var(--accent); border-bottom-color: var(--accent); }
+
+        .content { max-width: 1440px; margin: 0 auto; padding: 20px; }
+        .panel { display: none; }
+        .panel.active { display: block; }
+
+        .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+        .grid-3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 16px; }
+        .grid-4 { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; }
+
+        .card { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 20px; }
+        .card h3 { font-size: 13px; color: var(--text-dim); font-weight: 500; margin-bottom: 8px; }
+        .card .value { font-size: 28px; font-weight: 700; }
+        .card .change { font-size: 13px; margin-top: 4px; }
+        .change.pos { color: var(--green); }
+        .change.neg { color: var(--red); }
+
+        .chart-card { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 20px; margin-top: 16px; }
+        .chart-card h3 { font-size: 14px; font-weight: 600; margin-bottom: 16px; }
+
+        table { width: 100%; border-collapse: collapse; font-size: 13px; }
+        th { text-align: left; padding: 10px 12px; color: var(--text-dim); font-weight: 500; border-bottom: 1px solid var(--border); }
+        td { padding: 10px 12px; border-bottom: 1px solid var(--border); }
+        tr:hover { background: var(--surface2); }
+
+        .btn { padding: 8px 16px; border-radius: 8px; border: none; cursor: pointer; font-size: 13px; font-weight: 600; transition: opacity 0.2s; }
+        .btn:hover { opacity: 0.85; }
+        .btn-primary { background: var(--accent); color: white; }
+        .btn-green { background: var(--green); color: white; }
+        .btn-red { background: var(--red); color: white; }
+        .btn-outline { background: transparent; border: 1px solid var(--border); color: var(--text); }
+        .btn:disabled { opacity: 0.4; cursor: not-allowed; }
+
+        input, select { background: var(--surface2); border: 1px solid var(--border); color: var(--text); padding: 8px 12px; border-radius: 6px; font-size: 13px; }
+        label { font-size: 12px; color: var(--text-dim); display: block; margin-bottom: 4px; }
+
+        .form-row { display: flex; gap: 12px; align-items: end; flex-wrap: wrap; margin-bottom: 16px; }
+        .form-group { display: flex; flex-direction: column; }
+
+        .action-buy { color: var(--green); font-weight: 600; }
+        .action-sell { color: var(--red); font-weight: 600; }
+        .action-hold { color: var(--text-dim); }
+
+        .regime-bull { color: var(--green); }
+        .regime-crisis { color: var(--red); }
+        .regime-sideways { color: var(--yellow); }
+
+        .spinner { display: inline-block; width: 16px; height: 16px; border: 2px solid var(--border); border-top-color: var(--accent); border-radius: 50%; animation: spin 0.8s linear infinite; vertical-align: middle; }
+        @keyframes spin { to { transform: rotate(360deg); } }
+
+        .weight-bar { height: 8px; border-radius: 4px; background: var(--surface2); overflow: hidden; margin-top: 4px; }
+        .weight-bar-fill { height: 100%; border-radius: 4px; background: var(--accent); }
+
+        .log-area { background: var(--bg); border: 1px solid var(--border); border-radius: 8px; padding: 12px; font-family: monospace; font-size: 12px; max-height: 300px; overflow-y: auto; white-space: pre-wrap; color: var(--text-dim); margin-top: 12px; }
+
+        .tv-chart-container { border-radius: 8px; overflow: hidden; height: 500px; }
+        .tv-chart-container iframe { border: none; width: 100%; height: 100%; }
+
+        .info-box { background: rgba(99,102,241,0.08); border: 1px solid rgba(99,102,241,0.2); border-radius: 8px; padding: 12px 16px; margin: 12px 0; font-size: 13px; color: var(--text-dim); }
+        .info-box strong { color: var(--text); }
+        .warn-box { background: rgba(234,179,8,0.08); border: 1px solid rgba(234,179,8,0.2); border-radius: 8px; padding: 12px 16px; margin: 12px 0; font-size: 13px; color: var(--yellow); }
+
+        .ticker-pills { display: flex; gap: 6px; flex-wrap: wrap; margin: 8px 0; }
+        .ticker-pill { padding: 4px 10px; background: var(--surface2); border: 1px solid var(--border); border-radius: 16px; font-size: 12px; cursor: pointer; }
+        .ticker-pill.active { background: var(--accent); border-color: var(--accent); color: white; }
+
+        .progress-bar { width: 100%; height: 6px; background: var(--surface2); border-radius: 3px; overflow: hidden; margin-top: 8px; }
+        .progress-bar-fill { height: 100%; background: var(--accent); border-radius: 3px; transition: width 0.3s; }
+
+        .pipeline-arrow { display: flex; justify-content: center; color: var(--accent); font-size: 18px; padding: 4px 0; }
+        @media (max-width: 900px) { .grid-4 { grid-template-columns: 1fr 1fr; } .grid-3 { grid-template-columns: 1fr; } .grid-2 { grid-template-columns: 1fr; } }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1><span>FinMEM</span> + TradingAgents</h1>
+        <div class="status">
+            <span id="market-badge" class="badge badge-yellow">LOADING...</span>
+            <span id="portfolio-badge" class="badge badge-green">$0</span>
+        </div>
+    </div>
+
+    <div class="tabs">
+        <div class="tab active" data-tab="portfolio">Portfolio</div>
+        <div class="tab" data-tab="charts">Charts</div>
+        <div class="tab" data-tab="backtest">Backtest</div>
+        <div class="tab" data-tab="live">Live Trading</div>
+        <div class="tab" data-tab="regime">Regime</div>
+        <div class="tab" data-tab="weights">CVaR Weights</div>
+        <div class="tab" data-tab="pipeline">Pipeline Status</div>
+    </div>
+
+    <div class="content">
+
+        <!-- ═══════════ PORTFOLIO ═══════════ -->
+        <div id="panel-portfolio" class="panel active">
+            <div class="grid-4" id="portfolio-stats"></div>
+            <div class="chart-card" style="margin-top:16px">
+                <h3>Open Positions</h3>
+                <table id="positions-table">
+                    <thead><tr><th>Ticker</th><th>Shares</th><th>Avg Entry</th><th>Current</th><th>Market Value</th><th>P&L</th><th>P&L %</th></tr></thead>
+                    <tbody></tbody>
+                </table>
+                <p id="no-positions" style="color:var(--text-dim);padding:20px;text-align:center;display:none">No open positions</p>
+            </div>
+        </div>
+
+        <!-- ═══════════ CHARTS ═══════════ -->
+        <div id="panel-charts" class="panel">
+            <div class="card" style="margin-bottom:16px">
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>Symbol</label>
+                        <input id="chart-ticker" value="TSLA" style="width:120px"
+                               onkeydown="if(event.key==='Enter')updateChart()">
+                    </div>
+                    <button class="btn btn-primary" onclick="updateChart()">Load Chart</button>
+                </div>
+                <div class="ticker-pills" id="chart-pills"></div>
+            </div>
+            <div class="chart-card" style="padding:0">
+                <div class="tv-chart-container" id="tv-chart-wrap">
+                    <!-- TradingView Advanced Chart Widget -->
+                </div>
+            </div>
+        </div>
+
+        <!-- ═══════════ BACKTEST ═══════════ -->
+        <div id="panel-backtest" class="panel">
+            <div class="card" style="margin-bottom:16px">
+                <h3>Backtest Configuration</h3>
+                <div class="form-row" style="margin-top:12px">
+                    <div class="form-group">
+                        <label>Tickers (comma-separated)</label>
+                        <input id="bt-tickers" value="TSLA,NVDA,MSFT" style="width:220px">
+                    </div>
+                    <div class="form-group">
+                        <label>Start Date</label>
+                        <input id="bt-start" type="date" value="2024-01-02">
+                    </div>
+                    <div class="form-group">
+                        <label>End Date</label>
+                        <input id="bt-end" type="date" value="2024-03-29">
+                    </div>
+                    <div class="form-group">
+                        <label>Capital ($)</label>
+                        <input id="bt-capital" type="number" value="100000" style="width:120px">
+                    </div>
+                    <div class="form-group">
+                        <label>Mode</label>
+                        <select id="bt-mode" onchange="updateTimeEstimate()">
+                            <option value="fast">Fast (Regime Heuristic)</option>
+                            <option value="agents">Full Agents (LLM calls)</option>
+                        </select>
+                    </div>
+                    <button class="btn btn-primary" id="btn-backtest" onclick="runBacktest()">Run Backtest</button>
+                </div>
+
+                <div id="bt-time-estimate" class="info-box" style="display:none"></div>
+
+                <div class="info-box">
+                    <strong>Fast mode:</strong> Uses HMM regime classification to decide (BUY in BULL, SELL in CRISIS, HOLD in SIDEWAYS). Runs in seconds.<br>
+                    <strong>Agent mode:</strong> Runs the full TradingAgents pipeline (4 analysts + researcher debate + trader + risk + PM) via Gemini for <em>each ticker, each day</em>. ~1-3 min per ticker per day.
+                </div>
+            </div>
+
+            <div id="bt-progress" style="display:none" class="card">
+                <h3>Running Backtest...</h3>
+                <div class="progress-bar"><div class="progress-bar-fill" id="bt-progress-bar" style="width:0%"></div></div>
+                <p id="bt-progress-text" style="font-size:12px;color:var(--text-dim);margin-top:6px"></p>
+            </div>
+
+            <div id="bt-results" style="display:none">
+                <div class="grid-4" id="bt-stats"></div>
+                <div class="chart-card">
+                    <h3>Portfolio Value Over Time</h3>
+                    <canvas id="bt-chart" height="80"></canvas>
+                </div>
+                <div class="grid-2" style="margin-top:16px">
+                    <div class="chart-card">
+                        <h3>Buy & Hold Returns</h3>
+                        <canvas id="bt-bh-chart" height="60"></canvas>
+                    </div>
+                    <div class="chart-card">
+                        <h3>Regime Distribution</h3>
+                        <canvas id="bt-regime-chart" height="60"></canvas>
+                    </div>
+                </div>
+                <div class="chart-card">
+                    <h3>Trade Log</h3>
+                    <div style="max-height:400px;overflow-y:auto">
+                        <table id="bt-trades-table">
+                            <thead><tr><th>Date</th><th>Regime</th><th>Decisions</th><th>Cash</th><th>Total Value</th></tr></thead>
+                            <tbody></tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- ═══════════ LIVE TRADING ═══════════ -->
+        <div id="panel-live" class="panel">
+            <div class="card">
+                <h3>Single Autonomous Cycle</h3>
+                <p style="color:var(--text-dim);font-size:13px;margin:8px 0 16px">
+                    Runs the full pipeline: Regime Detection → BrainDB Memory → TradingAgents (Gemini) → CVaR Optimization → Alpaca Execution → Reflection
+                </p>
+                <div class="form-row">
+                    <button class="btn btn-primary" id="btn-dry" onclick="runCycle(true)">Dry Run (No Orders)</button>
+                    <button class="btn btn-green" id="btn-live" onclick="runCycle(false)">Execute Live (Paper)</button>
+                </div>
+                <div class="warn-box">Agent mode calls Gemini for each ticker. Expect ~3-10 min for a full cycle with 5 tickers.</div>
+            </div>
+            <div id="cycle-result" style="display:none" class="chart-card">
+                <h3>Cycle Result</h3>
+                <table id="cycle-table">
+                    <thead><tr><th>Ticker</th><th>Action</th><th>Regime</th><th>Shares</th><th>CVaR Weight</th><th>Status</th></tr></thead>
+                    <tbody></tbody>
+                </table>
+                <div id="cycle-log" class="log-area"></div>
+            </div>
+        </div>
+
+        <!-- ═══════════ REGIME ═══════════ -->
+        <div id="panel-regime" class="panel">
+            <div class="card">
+                <h3>Market Regime Classification</h3>
+                <div class="form-row" style="margin-top:12px">
+                    <div class="form-group">
+                        <label>Ticker</label>
+                        <input id="regime-ticker" value="SPY" style="width:120px" onkeydown="if(event.key==='Enter')classifyRegime()">
+                    </div>
+                    <button class="btn btn-primary" onclick="classifyRegime()">Classify</button>
+                </div>
+                <div class="info-box">HMM trained on SPY (2017-2022). Threshold uses 20-day vol & returns. Both produce BULL / SIDEWAYS / CRISIS labels.</div>
+            </div>
+            <div id="regime-result" style="display:none;margin-top:16px" class="grid-2"></div>
+        </div>
+
+        <!-- ═══════════ CVAR WEIGHTS ═══════════ -->
+        <div id="panel-weights" class="panel">
+            <div class="card">
+                <h3>CVaR Portfolio Optimization</h3>
+                <div class="form-row" style="margin-top:12px">
+                    <div class="form-group">
+                        <label>Tickers</label>
+                        <input id="cvar-tickers" value="TSLA,NVDA,MSFT,AMZN,AAPL" style="width:300px">
+                    </div>
+                    <button class="btn btn-primary" onclick="computeWeights()">Compute CVaR Weights</button>
+                </div>
+                <div class="info-box">Minimizes CVaR (Conditional Value-at-Risk) at 95% confidence. Max single-stock weight: 35%. Uses 60 days of returns.</div>
+            </div>
+            <div id="cvar-result" style="display:none">
+                <div class="chart-card">
+                    <h3>Optimal Allocation</h3>
+                    <canvas id="cvar-chart" height="60"></canvas>
+                </div>
+                <div class="chart-card">
+                    <table id="cvar-table">
+                        <thead><tr><th>Ticker</th><th>CVaR Weight</th><th>Allocation ($100K)</th><th></th></tr></thead>
+                        <tbody></tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+
+        <!-- ═══════════ PIPELINE STATUS ═══════════ -->
+        <div id="panel-pipeline" class="panel">
+            <div class="card" style="margin-bottom:16px">
+                <div style="display:flex;justify-content:space-between;align-items:center">
+                    <div>
+                        <h3>End-to-End Pipeline Health</h3>
+                        <p style="color:var(--text-dim);font-size:13px;margin-top:4px">Shows exactly what is wired, active, and how data flows across all stages</p>
+                    </div>
+                    <button class="btn btn-primary" onclick="loadPipelineStatus()">Refresh</button>
+                </div>
+                <div id="pipeline-summary" style="margin-top:12px"></div>
+            </div>
+            <div id="pipeline-stages"></div>
+        </div>
+
+    </div>
+
+    <script>
+    const API = '';
+    let btChart = null, btBhChart = null, btRegimeChart = null, cvarChart = null;
+
+    // ── Tab Navigation ──
+    document.querySelectorAll('.tab').forEach(tab => {
+        tab.addEventListener('click', () => {
+            document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+            document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
+            tab.classList.add('active');
+            document.getElementById('panel-' + tab.dataset.tab).classList.add('active');
+            if (tab.dataset.tab === 'charts') initChartPills();
+        });
+    });
+
+    async function api(path, body = null) {
+        const opts = body ? { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(body) } : {};
+        const res = await fetch(API + path, opts);
+        return res.json();
+    }
+
+    // ── Portfolio ──
+    async function loadPortfolio() {
+        try {
+            const data = await api('/api/portfolio');
+            if (!data.success) { document.getElementById('portfolio-stats').innerHTML = '<div class="card" style="grid-column:span 4"><p style="color:var(--text-dim)">Could not load Alpaca portfolio. Check API keys in .env</p></div>'; return; }
+
+            const a = data.account;
+            const dayPl = a.equity - a.last_equity;
+            const dayPct = a.last_equity > 0 ? (dayPl / a.last_equity * 100) : 0;
+            document.getElementById('market-badge').textContent = a.market_open ? 'MARKET OPEN' : 'MARKET CLOSED';
+            document.getElementById('market-badge').className = 'badge ' + (a.market_open ? 'badge-green' : 'badge-yellow');
+            document.getElementById('portfolio-badge').textContent = '$' + Number(a.portfolio_value).toLocaleString(undefined, {minimumFractionDigits:2});
+
+            document.getElementById('portfolio-stats').innerHTML = `
+                <div class="card"><h3>Portfolio Value</h3><div class="value">$${Number(a.portfolio_value).toLocaleString(undefined,{minimumFractionDigits:2})}</div></div>
+                <div class="card"><h3>Cash Available</h3><div class="value">$${Number(a.cash).toLocaleString(undefined,{minimumFractionDigits:2})}</div></div>
+                <div class="card"><h3>Buying Power</h3><div class="value">$${Number(a.buying_power).toLocaleString(undefined,{minimumFractionDigits:2})}</div></div>
+                <div class="card"><h3>Equity</h3><div class="value">$${Number(a.equity).toLocaleString(undefined,{minimumFractionDigits:2})}</div>
+                    <div class="change ${dayPl>=0?'pos':'neg'}">${dayPl>=0?'+':''}$${dayPl.toFixed(2)} today (${dayPct.toFixed(2)}%)</div></div>
+            `;
+
+            const tbody = document.querySelector('#positions-table tbody');
+            const positions = data.positions || {};
+            const tickers = Object.keys(positions);
+            if (tickers.length === 0) {
+                tbody.innerHTML = '';
+                document.getElementById('no-positions').style.display = 'block';
+            } else {
+                document.getElementById('no-positions').style.display = 'none';
+                tbody.innerHTML = tickers.map(t => {
+                    const p = positions[t];
+                    const plClass = p.unrealized_pl >= 0 ? 'pos' : 'neg';
+                    return `<tr>
+                        <td><strong>${t}</strong></td>
+                        <td>${p.shares}</td>
+                        <td>$${Number(p.avg_entry).toFixed(2)}</td>
+                        <td>$${Number(p.current_price).toFixed(2)}</td>
+                        <td>$${Number(p.market_value).toFixed(2)}</td>
+                        <td class="change ${plClass}">${p.unrealized_pl>=0?'+':''}$${Number(p.unrealized_pl).toFixed(2)}</td>
+                        <td class="change ${plClass}">${(Number(p.unrealized_plpc)*100).toFixed(2)}%</td>
+                    </tr>`;
+                }).join('');
+            }
+        } catch(e) {
+            document.getElementById('portfolio-stats').innerHTML = `<div class="card" style="grid-column:span 4"><p>Error: ${e.message}</p></div>`;
+        }
+    }
+
+    // ── TradingView Chart ──
+    function loadTVChart(symbol) {
+        const wrap = document.getElementById('tv-chart-wrap');
+        wrap.innerHTML = '';
+        const iframe = document.createElement('iframe');
+        iframe.src = `https://s.tradingview.com/widgetembed/?frameElementId=tv_chart&symbol=${encodeURIComponent(symbol)}&interval=D&hidesidetoolbar=0&symboledit=1&saveimage=0&toolbarbg=1a1d27&studies=[]&theme=dark&style=1&timezone=America%2FNew_York&withdateranges=1&showpopupbutton=0&width=100%25&height=100%25&locale=en`;
+        iframe.style.width = '100%';
+        iframe.style.height = '100%';
+        iframe.allowFullscreen = true;
+        wrap.appendChild(iframe);
+    }
+
+    function updateChart() {
+        const ticker = document.getElementById('chart-ticker').value.trim().toUpperCase();
+        if (ticker) loadTVChart(ticker);
+    }
+
+    function initChartPills() {
+        const pills = document.getElementById('chart-pills');
+        if (pills.children.length > 0) return;
+        const tickers = ['TSLA','NVDA','MSFT','AMZN','AAPL','SPY','QQQ','META','GOOG'];
+        pills.innerHTML = tickers.map(t =>
+            `<span class="ticker-pill" onclick="document.getElementById('chart-ticker').value='${t}';updateChart()">${t}</span>`
+        ).join('');
+        loadTVChart('TSLA');
+    }
+
+    // ── Backtest ──
+    function updateTimeEstimate() {
+        const mode = document.getElementById('bt-mode').value;
+        const box = document.getElementById('bt-time-estimate');
+        if (mode === 'fast') { box.style.display = 'none'; return; }
+
+        const start = new Date(document.getElementById('bt-start').value);
+        const end = new Date(document.getElementById('bt-end').value);
+        const nTickers = document.getElementById('bt-tickers').value.split(',').filter(t=>t.trim()).length;
+        const tradingDays = Math.round((end - start) / 86400000 * 5/7);
+        const minMin = Math.round(tradingDays * nTickers * 1 / 60);
+        const maxMin = Math.round(tradingDays * nTickers * 3 / 60);
+
+        box.style.display = 'block';
+        box.innerHTML = `<strong>Estimated time:</strong> ~${minMin}-${maxMin} minutes for ${tradingDays} trading days x ${nTickers} tickers.<br>
+            Each ticker-day makes ~8-12 Gemini API calls. For a quick test, try 1 ticker over 5 days first.`;
+    }
+
+    async function runBacktest() {
+        const btn = document.getElementById('btn-backtest');
+        btn.disabled = true;
+        btn.innerHTML = '<span class="spinner"></span> Running...';
+        document.getElementById('bt-results').style.display = 'none';
+
+        const mode = document.getElementById('bt-mode').value;
+        if (mode === 'agents') {
+            const prog = document.getElementById('bt-progress');
+            prog.style.display = 'block';
+            document.getElementById('bt-progress-text').textContent = 'Calling TradingAgents via Gemini... this will take a while.';
+            let pct = 0;
+            const interval = setInterval(() => {
+                pct = Math.min(pct + 0.5, 95);
+                document.getElementById('bt-progress-bar').style.width = pct + '%';
+            }, 2000);
+            try { await _doBacktest(); } finally { clearInterval(interval); prog.style.display = 'none'; }
+        } else {
+            await _doBacktest();
+        }
+
+        btn.disabled = false;
+        btn.textContent = 'Run Backtest';
+    }
+
+    async function _doBacktest() {
+        const data = await api('/api/backtest', {
+            tickers: document.getElementById('bt-tickers').value,
+            start_date: document.getElementById('bt-start').value,
+            end_date: document.getElementById('bt-end').value,
+            capital: parseFloat(document.getElementById('bt-capital').value),
+            use_agents: document.getElementById('bt-mode').value === 'agents',
+        });
+
+        if (!data.success) { alert('Backtest failed: ' + (data.error || 'Unknown error')); return; }
+
+        document.getElementById('bt-results').style.display = 'block';
+        const retPct = data.total_return_pct;
+        const retClass = retPct >= 0 ? 'pos' : 'neg';
+
+        const bhText = Object.entries(data.buy_hold_returns || {}).map(([t,r]) => `${t}: ${r>=0?'+':''}${r}%`).join(', ');
+
+        document.getElementById('bt-stats').innerHTML = `
+            <div class="card"><h3>Final Value</h3><div class="value">$${Number(data.final_value).toLocaleString()}</div></div>
+            <div class="card"><h3>Strategy Return</h3><div class="value change ${retClass}">${retPct>=0?'+':''}${retPct}%</div></div>
+            <div class="card"><h3>Trading Days</h3><div class="value">${data.total_days}</div></div>
+            <div class="card"><h3>Trades Executed</h3><div class="value">${data.trade_count}</div></div>
+        `;
+
+        // Portfolio value chart
+        if (btChart) btChart.destroy();
+        btChart = new Chart(document.getElementById('bt-chart').getContext('2d'), {
+            type: 'line',
+            data: {
+                labels: data.dates,
+                datasets: [{
+                    label: 'Portfolio Value',
+                    data: data.portfolio_values,
+                    borderColor: '#6366f1', backgroundColor: 'rgba(99,102,241,0.08)',
+                    fill: true, tension: 0.3, pointRadius: 0, borderWidth: 2,
+                }]
+            },
+            options: {
+                responsive: true,
+                plugins: { legend: { display: false } },
+                scales: {
+                    x: { ticks: { color: '#8b8fa3', maxTicksLimit: 12 }, grid: { color: '#2d3244' } },
+                    y: { ticks: { color: '#8b8fa3', callback: v => '$'+v.toLocaleString() }, grid: { color: '#2d3244' } },
+                },
+            }
+        });
+
+        // B&H chart
+        if (btBhChart) btBhChart.destroy();
+        const bhLabels = Object.keys(data.buy_hold_returns || {});
+        const bhValues = Object.values(data.buy_hold_returns || {});
+        btBhChart = new Chart(document.getElementById('bt-bh-chart').getContext('2d'), {
+            type: 'bar',
+            data: {
+                labels: bhLabels,
+                datasets: [{ label: 'B&H Return %', data: bhValues,
+                    backgroundColor: bhValues.map(v => v >= 0 ? 'rgba(34,197,94,0.7)' : 'rgba(239,68,68,0.7)'),
+                    borderRadius: 6 }]
+            },
+            options: { responsive: true, plugins: { legend: { display: false } },
+                scales: { x: { ticks: { color: '#8b8fa3' }, grid: { display: false } },
+                    y: { ticks: { color: '#8b8fa3', callback: v => v+'%' }, grid: { color: '#2d3244' } } } }
+        });
+
+        // Regime pie
+        if (btRegimeChart) btRegimeChart.destroy();
+        const regimeCounts = { BULL: 0, SIDEWAYS: 0, CRISIS: 0 };
+        (data.regimes || []).forEach(r => { if (regimeCounts[r] !== undefined) regimeCounts[r]++; });
+        btRegimeChart = new Chart(document.getElementById('bt-regime-chart').getContext('2d'), {
+            type: 'doughnut',
+            data: {
+                labels: ['BULL','SIDEWAYS','CRISIS'],
+                datasets: [{ data: [regimeCounts.BULL, regimeCounts.SIDEWAYS, regimeCounts.CRISIS],
+                    backgroundColor: ['#22c55e','#eab308','#ef4444'] }]
+            },
+            options: { responsive: true, plugins: { legend: { position: 'right', labels: { color: '#e4e6ed' } } } }
+        });
+
+        // Trade log
+        const tbody = document.querySelector('#bt-trades-table tbody');
+        tbody.innerHTML = (data.decisions || []).map(d => {
+            const tickerDecs = Object.entries(d.tickers || {}).map(([t, dec]) => {
+                const cls = dec.action === 'BUY' ? 'action-buy' : dec.action === 'SELL' ? 'action-sell' : 'action-hold';
+                const extra = dec.shares ? ` x${dec.shares}` : '';
+                return `<span class="${cls}">${t}:${dec.action}${extra}</span>`;
+            }).join(' &nbsp; ');
+            const regCls = 'regime-' + (d.regime || '').toLowerCase();
+            return `<tr>
+                <td>${d.date}</td>
+                <td class="${regCls}">${d.regime}</td>
+                <td>${tickerDecs}</td>
+                <td>$${Number(d.cash).toLocaleString()}</td>
+                <td>$${Number(d.total_value).toLocaleString()}</td>
+            </tr>`;
+        }).join('');
+    }
+
+    // ── Live Cycle ──
+    async function runCycle(dryRun) {
+        const btnD = document.getElementById('btn-dry');
+        const btnL = document.getElementById('btn-live');
+        btnD.disabled = btnL.disabled = true;
+        (dryRun ? btnD : btnL).innerHTML = '<span class="spinner"></span> Running...';
+
+        const resultDiv = document.getElementById('cycle-result');
+        resultDiv.style.display = 'block';
+        document.getElementById('cycle-log').textContent = 'Running full cycle (this may take several minutes)...\n';
+
+        const data = await api('/api/run-cycle', { dry_run: dryRun });
+        btnD.disabled = btnL.disabled = false;
+        btnD.textContent = 'Dry Run (No Orders)';
+        btnL.textContent = 'Execute Live (Paper)';
+
+        if (!data.success) {
+            document.getElementById('cycle-log').textContent = 'Error: ' + (data.error || 'Unknown');
+            return;
+        }
+
+        const tbody = document.querySelector('#cycle-table tbody');
+        tbody.innerHTML = Object.entries(data.decisions || {}).map(([ticker, dec]) => {
+            const cls = (dec.action||'').includes('BUY') ? 'action-buy' : (dec.action||'').includes('SELL') ? 'action-sell' : 'action-hold';
+            return `<tr>
+                <td><strong>${ticker}</strong></td>
+                <td class="${cls}">${dec.action || 'HOLD'}</td>
+                <td>${dec.regime || '-'}</td>
+                <td>${dec.target_shares || 0}</td>
+                <td>${((dec.cvar_weight || 0)*100).toFixed(1)}%</td>
+                <td>${dryRun ? 'DRY RUN' : 'EXECUTED'}</td>
+            </tr>`;
+        }).join('');
+
+        document.getElementById('cycle-log').textContent =
+            `Cycle #${data.cycle || '?'} completed at ${data.date || new Date().toISOString()}\nMode: ${dryRun ? 'Dry Run' : 'Live Execution'}`;
+    }
+
+    // ── Regime ──
+    async function classifyRegime() {
+        const ticker = document.getElementById('regime-ticker').value.trim().toUpperCase();
+        const data = await api('/api/regime-classify', { ticker });
+        if (!data.success) { alert(data.error); return; }
+
+        const div = document.getElementById('regime-result');
+        div.style.display = 'grid';
+
+        const regCls = 'regime-' + data.hmm.regime.toLowerCase();
+        div.innerHTML = `
+            <div class="card">
+                <h3>HMM Regime — ${ticker}</h3>
+                <div class="value ${regCls}" style="margin-bottom:12px">${data.hmm.regime}</div>
+                ${Object.entries(data.hmm.probabilities).map(([r, p]) => `
+                    <div style="margin-bottom:8px;display:flex;align-items:center;gap:8px">
+                        <span style="font-size:12px;color:var(--text-dim);width:70px">${r}</span>
+                        <div class="weight-bar" style="flex:1"><div class="weight-bar-fill" style="width:${p*100}%;background:${r==='BULL'?'var(--green)':r==='CRISIS'?'var(--red)':'var(--yellow)'}"></div></div>
+                        <span style="font-size:12px;width:45px;text-align:right">${(p*100).toFixed(1)}%</span>
+                    </div>
+                `).join('')}
+            </div>
+            <div class="card">
+                <h3>Threshold Regime</h3>
+                <div class="value regime-${data.threshold.regime.toLowerCase()}" style="margin-bottom:12px">${data.threshold.regime}</div>
+                <table style="margin-bottom:12px">
+                    <tr><td style="color:var(--text-dim)">Volatility (20d)</td><td>${data.features.volatility_20d}</td></tr>
+                    <tr><td style="color:var(--text-dim)">Mean Return (20d)</td><td>${data.features.mean_return_20d}</td></tr>
+                </table>
+                <h3>Adaptive Q Values</h3>
+                <table style="margin-top:8px">
+                    ${Object.entries(data.adaptive_q).map(([layer, q]) => `<tr><td style="color:var(--text-dim)">${layer}</td><td><strong>${q}</strong> days</td></tr>`).join('')}
+                </table>
+            </div>
+        `;
+    }
+
+    // ── CVaR Weights ──
+    async function computeWeights() {
+        const tickers = document.getElementById('cvar-tickers').value;
+        const data = await api('/api/cvar-weights', { tickers });
+        if (!data.success) { alert(data.error); return; }
+
+        document.getElementById('cvar-result').style.display = 'block';
+        const labels = Object.keys(data.weights);
+        const values = Object.values(data.weights);
+        const colors = ['#6366f1','#22c55e','#3b82f6','#eab308','#ef4444','#8b5cf6','#06b6d4','#f97316'];
+
+        if (cvarChart) cvarChart.destroy();
+        cvarChart = new Chart(document.getElementById('cvar-chart').getContext('2d'), {
+            type: 'bar',
+            data: { labels, datasets: [{ label: 'Weight %', data: values.map(v => v*100),
+                backgroundColor: labels.map((_,i) => colors[i % colors.length]), borderRadius: 6 }] },
+            options: { responsive: true, plugins: { legend: { display: false } },
+                scales: { x: { ticks: { color: '#8b8fa3' }, grid: { display: false } },
+                    y: { ticks: { color: '#8b8fa3', callback: v => v+'%' }, grid: { color: '#2d3244' }, max: 40 } } }
+        });
+
+        document.querySelector('#cvar-table tbody').innerHTML = labels.map((t, i) => {
+            const w = values[i];
+            return `<tr>
+                <td><strong>${t}</strong></td>
+                <td>${(w*100).toFixed(1)}%</td>
+                <td>$${(w*100000).toLocaleString(undefined,{minimumFractionDigits:0})}</td>
+                <td><div class="weight-bar" style="width:200px"><div class="weight-bar-fill" style="width:${Math.min(w*100/0.35*100,100)}%;background:${colors[i%colors.length]}"></div></div></td>
+            </tr>`;
+        }).join('');
+    }
+
+    // ── Pipeline Status ──
+    async function loadPipelineStatus() {
+        const stagesDiv = document.getElementById('pipeline-stages');
+        const summaryDiv = document.getElementById('pipeline-summary');
+        stagesDiv.innerHTML = '<p style="color:var(--text-dim)">Loading pipeline status...</p>';
+
+        const data = await api('/api/pipeline-status');
+        if (!data.success) { stagesDiv.innerHTML = `<div class="card"><p>Error loading status: ${data.error||'Unknown'}</p></div>`; return; }
+
+        const s = data.summary;
+        const allGood = s.fully_wired && s.active === s.total_stages;
+        summaryDiv.innerHTML = `
+            <div class="grid-4" style="margin-bottom:8px">
+                <div class="card"><h3>Stages</h3><div class="value">${s.total_stages}</div></div>
+                <div class="card"><h3>Wired</h3><div class="value" style="color:var(--green)">${s.wired}/${s.total_stages}</div></div>
+                <div class="card"><h3>Active</h3><div class="value" style="color:${s.active===s.total_stages?'var(--green)':'var(--yellow)'}">
+                    ${s.active}/${s.total_stages}</div></div>
+                <div class="card"><h3>Status</h3><div class="value" style="color:${allGood?'var(--green)':'var(--yellow)'}">${allGood?'ALL SYSTEMS GO':'PARTIAL'}</div></div>
+            </div>
+            ${data.issues && data.issues.length > 0 ? `<div class="warn-box">${data.issues.map(i=>'&#9888; '+i).join('<br>')}</div>` : ''}
+        `;
+
+        const statusColors = { active: 'var(--green)', partial: 'var(--yellow)', error: 'var(--red)', fallback: 'var(--yellow)' };
+        const statusLabels = { active: 'ACTIVE', partial: 'PARTIAL', error: 'ERROR', fallback: 'FALLBACK' };
+
+        stagesDiv.innerHTML = data.stages.map(st => {
+            const color = statusColors[st.status] || 'var(--text-dim)';
+            const label = statusLabels[st.status] || st.status.toUpperCase();
+
+            let feedsHtml = '';
+            if (st.feeds_into && st.feeds_into.length > 0) {
+                feedsHtml = `<div style="margin-top:8px"><span style="color:var(--text-dim);font-size:11px">FEEDS INTO:</span>
+                    ${st.feeds_into.map(f => `<div style="font-size:12px;color:var(--accent);padding:2px 0">&#8594; ${f}</div>`).join('')}</div>`;
+            }
+            let receivesHtml = '';
+            if (st.receives_from && st.receives_from.length > 0) {
+                receivesHtml = `<div style="margin-top:8px"><span style="color:var(--text-dim);font-size:11px">RECEIVES FROM:</span>
+                    ${st.receives_from.map(f => `<div style="font-size:12px;color:var(--blue);padding:2px 0">&#8592; ${f}</div>`).join('')}</div>`;
+            }
+
+            let positionsHtml = '';
+            if (st.positions && st.positions.length > 0) {
+                positionsHtml = `<table style="margin-top:8px;font-size:12px">
+                    <tr><th>Ticker</th><th>Shares</th><th>Market Value</th></tr>
+                    ${st.positions.map(p => `<tr><td>${p.ticker}</td><td>${p.shares}</td><td>$${Number(p.market_value).toLocaleString()}</td></tr>`).join('')}
+                </table>`;
+            }
+
+            let extraHtml = '';
+            if (st.importance_model) {
+                const im = st.importance_model;
+                extraHtml += `<div style="margin-top:8px;font-size:12px;color:var(--text-dim)">Model: ${im.loaded ? im.model_type + ' (acc=' + (im.accuracy*100).toFixed(1) + '%, n=' + im.n_samples + ')' : 'Not loaded'}</div>`;
+            }
+            if (st.auto_retrain) {
+                extraHtml += `<div style="font-size:12px;color:var(--text-dim)">Auto-retrain: ${st.auto_retrain}</div>`;
+            }
+            if (st.mode) {
+                extraHtml += `<div style="font-size:12px;color:var(--text-dim)">Mode: ${st.mode}</div>`;
+            }
+
+            return `<div class="card" style="margin-bottom:12px;border-left:3px solid ${color}">
+                <div style="display:flex;justify-content:space-between;align-items:center">
+                    <h3 style="font-size:14px;color:var(--text)">Stage ${st.stage}: ${st.name}</h3>
+                    <span class="badge" style="background:${color}20;color:${color}">${label}</span>
+                </div>
+                <p style="font-size:13px;margin-top:8px;color:var(--text-dim)">${st.detail}</p>
+                ${receivesHtml}${feedsHtml}${positionsHtml}${extraHtml}
+            </div>`;
+        }).join('');
+    }
+
+    // ── Init ──
+    loadPortfolio();
+    setInterval(loadPortfolio, 30000);
+    </script>
+</body>
+</html>

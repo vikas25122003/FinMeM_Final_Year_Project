@@ -1,0 +1,47 @@
+{
+  "cash": 48577.71,
+  "positions": {
+    "AAPL": {
+      "shares": 13.0,
+      "market_value": 3483.09,
+      "unrealized_pl": -44.59,
+      "unrealized_plpc": -0.01264,
+      "current_price": 267.93,
+      "avg_entry": 271.36
+    },
+    "AMZN": {
+      "shares": 37.0,
+      "market_value": 9311.79,
+      "unrealized_pl": -0.430014,
+      "unrealized_plpc": -5e-05,
+      "current_price": 251.67,
+      "avg_entry": 251.681622
+    },
+    "MSFT": {
+      "shares": 31.0,
+      "market_value": 13221.035,
+      "unrealized_pl": -2.325,
+      "unrealized_plpc": -0.00018,
+      "current_price": 426.485,
+      "avg_entry": 426.56
+    },
+    "NVDA": {
+      "shares": 96.0,
+      "market_value": 19307.52,
+      "unrealized_pl": 4.8,
+      "unrealized_plpc": 0.00025,
+      "current_price": 201.12,
+      "avg_entry": 201.07
+    },
+    "TSLA": {
+      "shares": 15.0,
+      "market_value": 5853.3,
+      "unrealized_pl": -203.01,
+      "unrealized_plpc": -0.03352,
+      "current_price": 390.22,
+      "avg_entry": 403.754
+    }
+  },
+  "total_value": 99752.73,
+  "trade_history": []
+}

@@ -1,0 +1,12 @@
+{
+  "cycle": 1,
+  "date": "2026-04-22",
+  "decisions": {
+    "TSLA": "SELL",
+    "NVDA": "BUY",
+    "MSFT": "BUY",
+    "AMZN": "BUY",
+    "AAPL": "SELL"
+  },
+  "portfolio_value": 99752.73
+}

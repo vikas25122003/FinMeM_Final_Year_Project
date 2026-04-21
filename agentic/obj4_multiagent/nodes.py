@@ -240,7 +240,7 @@ def fundamental_node(state: AgentState) -> Dict[str, Any]:
         f"Analyze these memories and produce your fundamental assessment."
     )
 
-    llm = _get_bedrock_llm("FUNDAMENTAL_MODEL", "us.anthropic.claude-3-5-haiku-20241022-v1:0")
+    llm = _get_bedrock_llm("FUNDAMENTAL_MODEL", "moonshotai.kimi-k2.5")
     response = _invoke_llm(llm, FUNDAMENTAL_SYSTEM_PROMPT, user_prompt)
     report = _parse_agent_json(response)
     report["raw_response"] = response
@@ -294,7 +294,7 @@ def sentiment_node(state: AgentState) -> Dict[str, Any]:
         f"Analyze these memories and produce your sentiment assessment."
     )
 
-    llm = _get_bedrock_llm("SENTIMENT_MODEL", "us.amazon.nova-micro-v1:0")
+    llm = _get_bedrock_llm("SENTIMENT_MODEL", "moonshotai.kimi-k2.5")
     response = _invoke_llm(llm, SENTIMENT_SYSTEM_PROMPT, user_prompt)
     report = _parse_agent_json(response)
     report["raw_response"] = response
@@ -351,7 +351,7 @@ def technical_node(state: AgentState) -> Dict[str, Any]:
         f"Analyze the technical data and memories, then produce your technical assessment."
     )
 
-    llm = _get_bedrock_llm("TECHNICAL_MODEL", "us.deepseek.r1-v1:0")
+    llm = _get_bedrock_llm("TECHNICAL_MODEL", "moonshotai.kimi-k2.5")
     response = _invoke_llm(llm, TECHNICAL_SYSTEM_PROMPT, user_prompt)
     report = _parse_agent_json(response)
     report["raw_response"] = response
@@ -374,7 +374,7 @@ def debate_node(state: AgentState) -> Dict[str, Any]:
     logger.info(f"[Obj4] debate_node: {state['ticker']}")
 
     debate_rounds = int(os.getenv("DEBATE_ROUNDS", "2"))
-    llm = _get_bedrock_llm("DEBATE_MODEL", "us.anthropic.claude-3-5-haiku-20241022-v1:0")
+    llm = _get_bedrock_llm("DEBATE_MODEL", "moonshotai.kimi-k2.5")
 
     # Gather reports for debate context
     def _report_summary(report: Optional[Dict]) -> str:
@@ -552,7 +552,7 @@ def risk_node(state: AgentState) -> Dict[str, Any]:
         kelly_shares = int(kelly_amount / state["cur_price"])
 
     # LLM risk assessment (optional, for richer output)
-    llm = _get_bedrock_llm("DEBATE_MODEL", "us.anthropic.claude-3-5-haiku-20241022-v1:0", temperature=0.2)
+    llm = _get_bedrock_llm("DEBATE_MODEL", "moonshotai.kimi-k2.5", temperature=0.2)
     risk_prompt = RISK_MANAGER_PROMPT.format(
         ticker=state["ticker"],
         consensus_direction=direction,
@@ -632,7 +632,7 @@ def final_node(state: AgentState) -> Dict[str, Any]:
 
     # Portfolio Manager LLM call for final reasoning
     ps = state.get("portfolio_state", {})
-    llm = _get_bedrock_llm("PORTFOLIO_MODEL", "us.deepseek.r1-v1:0", temperature=0.2)
+    llm = _get_bedrock_llm("PORTFOLIO_MODEL", "moonshotai.kimi-k2.5", temperature=0.2)
 
     pm_prompt = PORTFOLIO_MANAGER_PROMPT.format(
         ticker=state["ticker"],

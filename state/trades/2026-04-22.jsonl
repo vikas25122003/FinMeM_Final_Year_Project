@@ -1,0 +1,8 @@
+{"ticker": "TSLA", "timestamp": "2026-04-22T01:01:38.204757", "action": "SELL", "status": "zero_shares"}
+{"ticker": "NVDA", "timestamp": "2026-04-22T01:01:46.963025", "action": "BUY", "order_type": "limit", "qty": 96, "limit_price": 201.47, "order_id": "5107b393-a696-4eea-9c31-3d83b701bdca", "status": "filled", "filled_qty": 96.0, "filled_avg_price": 201.07, "filled_at": "2026-04-21 19:31:45.462577+00:00"}
+{"ticker": "NVDA", "timestamp": "2026-04-22T01:01:46.963924", "action": "STOP_LOSS", "qty": 96, "stop_price": 191.02, "order_id": "72c6bfd6-f224-4444-b2f7-5f5565b1bb4d", "status": "pending_new"}
+{"ticker": "MSFT", "timestamp": "2026-04-22T01:01:51.544868", "action": "BUY", "order_type": "limit", "qty": 31, "limit_price": 427.3, "order_id": "4fb1d8d2-b8aa-4d1a-a69d-3326d32c1075", "status": "filled", "filled_qty": 31.0, "filled_avg_price": 426.56, "filled_at": "2026-04-21 19:31:49.926174+00:00"}
+{"ticker": "MSFT", "timestamp": "2026-04-22T01:01:51.545063", "action": "STOP_LOSS", "qty": 31, "stop_price": 405.23, "order_id": "75dbda23-0e04-4bb4-90b0-061db63417c2", "status": "pending_new"}
+{"ticker": "AMZN", "timestamp": "2026-04-22T01:01:58.985225", "action": "BUY", "order_type": "limit", "qty": 37, "limit_price": 252.15, "order_id": "98bb873e-278f-4e10-a982-aaffe9dba1e3", "status": "filled", "filled_qty": 37.0, "filled_avg_price": 251.681622, "filled_at": "2026-04-21 19:31:54.425324+00:00"}
+{"ticker": "AMZN", "timestamp": "2026-04-22T01:01:58.985803", "action": "STOP_LOSS", "qty": 37, "stop_price": 239.1, "order_id": "e46defb9-0e08-4574-8a12-f98769c76bd8", "status": "pending_new"}
+{"ticker": "AAPL", "timestamp": "2026-04-22T01:01:58.986046", "action": "SELL", "status": "zero_shares"}

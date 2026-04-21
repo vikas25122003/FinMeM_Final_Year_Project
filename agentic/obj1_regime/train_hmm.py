@@ -30,9 +30,9 @@ logger = logging.getLogger(__name__)
 
 
 def train(
-    ticker: str = "TSLA",
-    start_date: str = "2019-01-01",
-    end_date: str   = "2022-03-13",   # strictly before FinMEM train start
+    ticker: str = "SPY",
+    start_date: str = "2017-01-01",
+    end_date: str   = "2022-03-13",
     n_states: int   = 3,
     n_iter: int     = 200,
     save_path: str  = "./models/hmm_regime.pkl",
@@ -40,10 +40,15 @@ def train(
     """
     Fit and save a GaussianHMM regime classifier.
 
+    Uses SPY (S&P 500 ETF) by default because regime detection should reflect
+    broad market conditions, not single-stock idiosyncrasies. 5 years of data
+    (2017-2022) captures multiple regimes: 2017-2019 bull, 2020 COVID crash,
+    2020-2021 recovery, 2022 rate-hike drawdown.
+
     Args:
-        ticker:     Stock to train on. Use TSLA for FinMEM comparisons.
-        start_date: Training data start (YYYY-MM-DD).
-        end_date:   Training data end. Must be BEFORE FinMEM train period.
+        ticker:     Market ETF for training. SPY recommended for broad regime.
+        start_date: Training data start (YYYY-MM-DD). 5 years gives robust regime coverage.
+        end_date:   Training data end. Must be BEFORE any backtest/live period.
         n_states:   Number of HMM hidden states (3 = BULL/SIDEWAYS/CRISIS).
         n_iter:     Baum-Welch EM max iterations.
         save_path:  Where to save the fitted model pickle.
@@ -113,9 +118,9 @@ if __name__ == "__main__":
     import argparse
 
     parser = argparse.ArgumentParser(description="Train HMM Regime Classifier")
-    parser.add_argument("--ticker",     default="TSLA",       help="Stock ticker for training data")
-    parser.add_argument("--start-date", default="2019-01-01", help="Training start date")
-    parser.add_argument("--end-date",   default="2022-03-13", help="Training end date (before FinMEM train)")
+    parser.add_argument("--ticker",     default="SPY",        help="Market ETF for training (SPY recommended)")
+    parser.add_argument("--start-date", default="2017-01-01", help="Training start date (5yr history)")
+    parser.add_argument("--end-date",   default="2022-03-13", help="Training end date (before any backtest)")
     parser.add_argument("--n-states",   default=3,  type=int, help="Number of HMM hidden states")
     parser.add_argument("--n-iter",     default=200,type=int, help="Baum-Welch EM iterations")
     parser.add_argument("--save-path",  default="./models/hmm_regime.pkl", help="Output path")

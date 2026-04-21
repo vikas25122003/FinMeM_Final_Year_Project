@@ -58,6 +58,11 @@ except Exception as e:
 
 @app.route("/")
 def index():
+    return send_from_directory(".", "dashboard.html")
+
+
+@app.route("/old")
+def old_index():
     return send_from_directory(".", "index.html")
 
 
@@ -472,8 +477,293 @@ def obj4_info():
 
 
 
+# ── Portfolio & Alpaca Endpoints ──────────────────────────────────────────
+
+@app.route("/api/portfolio", methods=["GET"])
+def get_portfolio():
+    """Get live Alpaca portfolio: account info + all positions."""
+    try:
+        sys.path.insert(0, os.path.join(project_root, "..", "TradingAgents"))
+        from orchestrator.alpaca_enhanced import get_account_info, get_positions
+        account = get_account_info()
+        positions = get_positions()
+        return jsonify({"success": True, "account": account, "positions": positions})
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)})
+
+
+# ── Backtest Endpoint ─────────────────────────────────────────────────────
+
+@app.route("/api/backtest", methods=["POST"])
+def run_backtest_endpoint():
+    """Run a backtest over a historical date range."""
+    try:
+        sys.path.insert(0, os.path.join(project_root, "..", "TradingAgents"))
+        data = request.json or {}
+        tickers_str = data.get("tickers", os.getenv("PORTFOLIO_TICKERS", "TSLA,NVDA,MSFT,AMZN,AAPL"))
+        if isinstance(tickers_str, str):
+            tickers = [t.strip() for t in tickers_str.split(",")]
+        else:
+            tickers = tickers_str
+
+        start_date = data.get("start_date", "2024-01-01")
+        end_date = data.get("end_date", "2024-03-01")
+        initial_cash = float(data.get("capital", 100000))
+        use_agents = data.get("use_agents", False)
+
+        from orchestrator.backtester import run_backtest
+        result = run_backtest(
+            tickers=tickers,
+            start_date=start_date,
+            end_date=end_date,
+            initial_cash=initial_cash,
+            use_trading_agents=use_agents,
+        )
+
+        return jsonify({"success": True, **result.to_dict()})
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e), "traceback": traceback.format_exc()})
+
+
+# ── Live Cycle Endpoint ───────────────────────────────────────────────────
+
+@app.route("/api/run-cycle", methods=["POST"])
+def run_live_cycle():
+    """Run a single autonomous trading cycle (dry-run by default)."""
+    try:
+        sys.path.insert(0, os.path.join(project_root, "..", "TradingAgents"))
+        data = request.json or {}
+        dry_run = data.get("dry_run", True)
+
+        from orchestrator.config import get_orchestrator_config
+        from orchestrator.orchestrator import AutonomousTrader
+
+        config = get_orchestrator_config()
+        trader = AutonomousTrader(config)
+        trader.initialize()
+        result = trader.run_cycle(dry_run=dry_run)
+
+        decisions_clean = {}
+        for ticker, dec in result.get("decisions", {}).items():
+            decisions_clean[ticker] = {
+                k: v for k, v in dec.items()
+                if k not in ("final_state",) and not callable(v)
+            }
+
+        return jsonify({
+            "success": True,
+            "cycle": result.get("cycle"),
+            "date": result.get("date"),
+            "decisions": decisions_clean,
+        })
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e), "traceback": traceback.format_exc()})
+
+
+# ── CVaR Weights Endpoint ────────────────────────────────────────────────
+
+@app.route("/api/cvar-weights", methods=["POST"])
+def cvar_weights():
+    """Compute CVaR-optimal portfolio weights for given tickers."""
+    try:
+        sys.path.insert(0, os.path.join(project_root, "..", "TradingAgents"))
+        data = request.json or {}
+        tickers_str = data.get("tickers", os.getenv("PORTFOLIO_TICKERS", "TSLA,NVDA,MSFT,AMZN,AAPL"))
+        if isinstance(tickers_str, str):
+            tickers = [t.strip() for t in tickers_str.split(",")]
+        else:
+            tickers = tickers_str
+
+        from orchestrator.cvar_optimizer import _fetch_returns, optimize_cvar_weights
+        returns_df = _fetch_returns(tickers, window_days=60)
+        weights = optimize_cvar_weights(tickers, returns_df, 0.95, 0.35)
+
+        return jsonify({"success": True, "weights": weights, "tickers": tickers})
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)})
+
+
+# ── Pipeline Status Endpoint ──────────────────────────────────────────────
+
+@app.route("/api/pipeline-status", methods=["GET"])
+def pipeline_status():
+    """Show exactly which components are wired, active, and what data flows where.
+
+    This is the 'product health check' — it tells the user what
+    the system will actually do when a cycle runs.
+    """
+    status = {"stages": [], "issues": []}
+
+    # Stage 0: Alpaca Sync
+    alpaca_ok = False
+    try:
+        from orchestrator.alpaca_enhanced import get_account_info, get_positions
+        account = get_account_info()
+        positions = get_positions()
+        alpaca_ok = True
+        pos_list = [{"ticker": t, "shares": int(float(p.get("shares", 0))),
+                     "market_value": round(float(p.get("market_value", 0)), 2)}
+                    for t, p in positions.items()]
+        status["stages"].append({
+            "stage": 0, "name": "Alpaca Portfolio Sync",
+            "status": "active", "wired": True,
+            "detail": f"Cash=${account['cash']:,.2f}, "
+                      f"Equity=${account['equity']:,.2f}, "
+                      f"{len(positions)} positions",
+            "positions": pos_list,
+        })
+    except Exception as e:
+        status["stages"].append({
+            "stage": 0, "name": "Alpaca Portfolio Sync",
+            "status": "error", "wired": True, "detail": str(e),
+        })
+        status["issues"].append("Alpaca API not reachable — SELL orders cannot be sized correctly")
+
+    # Stage 1: Regime Detection (Obj1)
+    regime_ok = False
+    try:
+        from agentic.obj1_regime.classifier import get_classifier
+        clf = get_classifier("hmm")
+        regime_ok = True
+        status["stages"].append({
+            "stage": 1, "name": "Regime Detection (Obj1 HMM)",
+            "status": "active", "wired": True,
+            "detail": "HMM classifier trained on SPY — classifies BULL/SIDEWAYS/CRISIS per ticker",
+            "feeds_into": ["Stage 3 (TradingAgents context)", "Stage 4 (CVaR risk adjustment)"],
+        })
+    except Exception as e:
+        status["stages"].append({
+            "stage": 1, "name": "Regime Detection (Obj1)",
+            "status": "fallback", "wired": True,
+            "detail": f"HMM load failed ({e}), using threshold classifier",
+        })
+
+    # Stage 2: Memory + Learned Importance (Obj2)
+    importance_active = os.getenv("LEARNED_IMPORTANCE", "false").lower() == "true"
+    model_loaded = False
+    try:
+        from agentic.obj2_importance.inference import is_model_loaded, get_model_info
+        model_loaded = is_model_loaded()
+        model_info = get_model_info()
+    except Exception:
+        model_info = {"loaded": False}
+
+    status["stages"].append({
+        "stage": 2, "name": "Memory Decay + Learned Importance (Obj2)",
+        "status": "active" if importance_active and model_loaded else "partial",
+        "wired": True,
+        "detail": (
+            f"BrainDB 4-layer memory (short/mid/long/reflection). "
+            f"Obj2 importance: {'ACTIVE (model loaded)' if model_loaded else 'OFF — using random fallback'}. "
+            f"Memories are queried per-ticker and injected into TradingAgents context."
+        ),
+        "importance_model": model_info,
+        "feeds_into": ["Stage 3 (BrainDB context → TA subprocess --context arg)"],
+        "auto_retrain": "Every 5 cycles" if importance_active else "Disabled",
+    })
+
+    # Stage 3: TradingAgents Decision
+    ta_mode = "unknown"
+    ta_detail = ""
+    try:
+        conda_python = os.path.expanduser("~/miniconda3/envs/tradingagents/bin/python")
+        ta_runner = os.path.join(project_root, "..", "TradingAgents", "ta_runner.py")
+        if os.path.exists(conda_python) and os.path.exists(ta_runner):
+            ta_mode = "subprocess"
+            ta_detail = (
+                f"Runs via subprocess in tradingagents conda env. "
+                f"LLM: {os.getenv('TA_LLM_PROVIDER', 'google')} / "
+                f"{os.getenv('TA_DEEP_LLM', 'gemini-2.5-pro')}. "
+                f"BrainDB context + portfolio state injected via --context flag."
+            )
+        else:
+            ta_mode = "missing"
+            ta_detail = "Neither subprocess nor direct import available"
+            status["issues"].append("TradingAgents not available")
+    except Exception:
+        pass
+
+    status["stages"].append({
+        "stage": 3, "name": "TradingAgents Decision",
+        "status": "active" if ta_mode == "subprocess" else "error",
+        "wired": True,
+        "mode": ta_mode,
+        "detail": ta_detail,
+        "receives_from": [
+            "Stage 0 (current portfolio positions + cash)",
+            "Stage 1 (regime label)",
+            "Stage 2 (BrainDB memories ranked by importance)",
+        ],
+        "feeds_into": ["Stage 4 (BUY/SELL/HOLD signals)"],
+    })
+
+    # Stage 4: CVaR + Correlation Guard (Obj3)
+    status["stages"].append({
+        "stage": 4, "name": "CVaR Portfolio Optimization + Correlation Guard (Obj3)",
+        "status": "active", "wired": True,
+        "detail": (
+            f"CVaR confidence={os.getenv('CVAR_CONFIDENCE', '0.95')}, "
+            f"max_weight={os.getenv('CVAR_MAX_WEIGHT', '0.35')}, "
+            f"correlation_threshold={os.getenv('CONCENTRATION_THRESHOLD', '0.80')}. "
+            f"Computes optimal weights via tail-risk minimization. "
+            f"Correlation guard overrides lower-confidence BUY→HOLD when pairwise correlation > threshold."
+        ),
+        "receives_from": [
+            "Stage 3 (ticker decisions with confidence)",
+            "Stage 0 (portfolio_value for position sizing)",
+        ],
+        "feeds_into": ["Stage 5 (sized orders: target_shares per ticker)"],
+    })
+
+    # Stage 5: Execution
+    status["stages"].append({
+        "stage": 5, "name": "Alpaca Execution",
+        "status": "active" if alpaca_ok else "error",
+        "wired": True,
+        "detail": (
+            "Executes BUY (limit orders), SELL (market orders), stop-loss placement. "
+            "SELL uses real Alpaca share count (synced from Stage 0). "
+            "After execution, portfolio_state is re-synced from Alpaca."
+        ),
+        "receives_from": ["Stage 4 (action + target_shares per ticker)"],
+        "feeds_into": ["Stage 6 (positions_before vs positions_after for P&L)"],
+    })
+
+    # Stage 6: Reflection
+    status["stages"].append({
+        "stage": 6, "name": "Reflection + Obj2 Retraining",
+        "status": "active", "wired": True,
+        "detail": (
+            "Stores reflection in BrainDB reflection layer (ticker, date, action, P&L). "
+            "Logs data to logs/reflections/*.jsonl for Obj2 importance retraining. "
+            "Auto-retrains importance model every 5 cycles (if enabled)."
+        ),
+        "receives_from": [
+            "Stage 5 (execution results, positions_before/after)",
+            "Stage 3 (agent reports)",
+        ],
+        "feeds_into": [
+            "Stage 2 (BrainDB reflection memories for future cycles)",
+            "Obj2 importance model (retraining data)",
+        ],
+    })
+
+    # Summary
+    wired_count = sum(1 for s in status["stages"] if s.get("wired"))
+    active_count = sum(1 for s in status["stages"] if s.get("status") == "active")
+    status["summary"] = {
+        "total_stages": len(status["stages"]),
+        "wired": wired_count,
+        "active": active_count,
+        "tickers": os.getenv("PORTFOLIO_TICKERS", "TSLA,NVDA,MSFT,AMZN,AAPL").split(","),
+        "fully_wired": len(status["issues"]) == 0,
+    }
+
+    return jsonify({"success": True, **status})
+
+
 if __name__ == "__main__":
-    print("\n  🚀 FinMEM Dashboard Server")
+    print("\n  FinMEM + TradingAgents Dashboard")
     print("  ────────────────────────────────────")
     print("  Open: http://localhost:5050")
     print("  ────────────────────────────────────\n")
