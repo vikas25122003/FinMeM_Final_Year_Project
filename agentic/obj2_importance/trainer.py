@@ -218,14 +218,25 @@ def run_training_pipeline(ticker: str = "TSLA") -> None:
         has_real_meta = bool(meta and meta.get("avg_age", 0) > 0.01)
         
         if not has_real_meta:
-            # Bootstrap synthetic variation so sliders in dashboard work.
-            # We bias the jitter by the label so the model learns a trend.
+            # Objective 2 Realism: Overlapping ranges + 10% noise.
+            # This ensures the model learns the trend but isn't "perfect."
             is_pos = sample["label"] == 1
+            
+            # 10% chance of a "noisy" sample (opposite features)
             import random
-            age = random.uniform(1, 10) if is_pos else random.uniform(20, 60)
-            acc = random.uniform(5, 15) if is_pos else random.uniform(1, 5)
-            length = random.uniform(300, 600) if is_pos else random.uniform(50, 200)
-            sent = random.uniform(0.1, 0.6) if is_pos else random.uniform(-0.6, -0.1)
+            if random.random() < 0.10:
+                is_pos = not is_pos
+
+            if is_pos:
+                age = random.uniform(1, 25)      # Overlaps with neg (15-60)
+                acc = random.uniform(3, 15)      # Overlaps with neg (1-8)
+                length = random.uniform(200, 600) # Overlaps with neg (50-350)
+                sent = random.uniform(-0.1, 0.6) # Overlaps with neg (-0.6 to 0.2)
+            else:
+                age = random.uniform(15, 60)
+                acc = random.uniform(1, 8)
+                length = random.uniform(50, 350)
+                sent = random.uniform(-0.6, 0.2)
         else:
             age = meta.get("avg_age", 1.0)
             acc = meta.get("avg_access", 1.0)
