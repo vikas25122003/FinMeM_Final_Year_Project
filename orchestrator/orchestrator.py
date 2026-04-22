@@ -187,12 +187,22 @@ class AutonomousTrader:
     # ──────────────────────────────────────────────────────────────────────
 
     def step_memory(self, trade_date: str) -> None:
+        """Decay all layers AND trigger memory promotion/demotion (jumps).
+
+        Uses BrainDB.step() which internally:
+          1. Decays recency + importance in all 4 layers
+          2. Cleans up memories below threshold
+          3. Runs 2 rounds of jump logic:
+             Short→Mid (promote), Mid→Long (promote),
+             Mid→Short (demote), Long→Mid (demote)
+        """
         if self.brain is None:
             return
-        for layer in [self.brain.short_term_memory, self.brain.mid_term_memory,
-                      self.brain.long_term_memory, self.brain.reflection_memory]:
-            layer.step(current_date=trade_date)
-        logger.info(f"[Stage2] Memory decay step completed for {trade_date}")
+        self.brain.step(current_date=trade_date)
+        stats = self.brain.stats()
+        logger.info(f"[Stage2] Memory step completed for {trade_date} | "
+                    f"counts: S={stats['short']} M={stats['mid']} "
+                    f"L={stats['long']} R={stats['reflection']}")
 
     def _get_brain_context(self, ticker: str, trade_date: str, regime: str) -> str:
         """Query BrainDB for relevant memories to inject into TradingAgents prompt.
@@ -299,7 +309,7 @@ class AutonomousTrader:
             "--llm-provider", provider,
             "--deep-llm", deep_llm,
             "--quick-llm", quick_llm,
-            "--context", full_context[:2000],
+            "--context", full_context[:8000],
         ]
 
         ta_dir = str(Path(TA_RUNNER).parent)
@@ -322,7 +332,8 @@ class AutonomousTrader:
                     break
 
             action = data.get("action", "HOLD").strip().upper()
-            logger.info(f"[Stage3] {ticker} subprocess → {action}")
+            confidence = self._extract_confidence(data)
+            logger.info(f"[Stage3] {ticker} subprocess → {action} (conf={confidence:.2f})")
 
             # Ingest TA reports back into BrainDB
             if self.brain and data.get("raw_decision"):
@@ -341,14 +352,56 @@ class AutonomousTrader:
                 except Exception:
                     pass
 
-            return {"signal": action, "final_state": data, "memory_ids": []}
+            return {"signal": action, "confidence": confidence,
+                    "final_state": data, "memory_ids": []}
 
         except subprocess.TimeoutExpired:
             logger.warning(f"[Stage3] Subprocess timeout for {ticker}")
-            return {"signal": "HOLD", "final_state": {}, "memory_ids": []}
+            return {"signal": "HOLD", "confidence": 0.3, "final_state": {}, "memory_ids": []}
         except Exception as e:
             logger.warning(f"[Stage3] Subprocess error for {ticker}: {e}")
-            return {"signal": "HOLD", "final_state": {}, "memory_ids": []}
+            return {"signal": "HOLD", "confidence": 0.3, "final_state": {}, "memory_ids": []}
+
+    @staticmethod
+    def _extract_confidence(ta_data: Dict[str, Any]) -> float:
+        """Parse confidence/conviction from TradingAgents output text.
+
+        Scans the raw_decision and trader_plan for conviction keywords and maps
+        them to numeric confidence scores. Falls back to 0.65 if no keywords
+        are found. Returns a value in [0.3, 0.95].
+        """
+        import re
+        text = (
+            str(ta_data.get("raw_decision", ""))
+            + " "
+            + str(ta_data.get("trader_plan", ""))
+        ).lower()
+
+        # Look for explicit confidence/conviction percentages: "confidence: 85%"
+        pct_match = re.search(r'(?:confidence|conviction)[:\s]*(\d{1,3})\s*%', text)
+        if pct_match:
+            val = int(pct_match.group(1))
+            return max(0.3, min(0.95, val / 100.0))
+
+        # Keyword-based mapping
+        high_conf = {"strong buy", "strongly recommend", "high conviction",
+                     "very confident", "aggressive buy", "strong sell"}
+        med_conf = {"buy", "recommend buying", "moderate conviction",
+                    "overweight", "accumulate"}
+        low_conf = {"hold", "neutral", "cautious", "uncertain", "mixed signals",
+                    "low conviction", "underweight", "reduce"}
+
+        for keyword in high_conf:
+            if keyword in text:
+                return 0.85
+        for keyword in low_conf:
+            if keyword in text:
+                return 0.45
+        for keyword in med_conf:
+            if keyword in text:
+                return 0.70
+
+        return 0.65  # default middle-ground
 
     # ──────────────────────────────────────────────────────────────────────
     #  STAGE 4: CVaR + Correlation Guard (Obj3)
@@ -461,12 +514,14 @@ class AutonomousTrader:
                 except Exception as e:
                     logger.warning(f"[Stage6] Full reflection failed for {ticker}: {e}")
             else:
+                # Subprocess mode: still do BrainDB reflection + access counter update
                 if self.brain:
                     try:
                         mem_date = datetime.strptime(trade_date, "%Y-%m-%d").date()
                         raw = str(final_state.get("raw_decision", ""))[:200]
 
-                        # Compute realized P&L for this ticker if we have before/after
+                        # Compute realized P&L for this ticker
+                        pnl = 0.0
                         pnl_str = ""
                         before = self.positions_before.get(ticker, {})
                         after = positions_after.get(ticker, {})
@@ -476,10 +531,23 @@ class AutonomousTrader:
                             pnl = after_val - before_val
                             pnl_str = f" PnL=${pnl:+.2f}"
 
+                        # Store reflection memory
                         self.brain.add_memory_reflection(
                             ticker, mem_date,
                             f"[{ticker}@{trade_date}] Action={action}.{pnl_str} {raw}",
                         )
+
+                        # Update access counters for memories used in this decision
+                        # (+1 if profitable, -1 if loss) — drives importance evolution
+                        if memory_ids:
+                            feedback = 1 if pnl > 0 else (-1 if pnl < 0 else 0)
+                            if feedback != 0:
+                                self.brain.update_access_count_with_feedback(
+                                    ticker, memory_ids, feedback
+                                )
+                                logger.info(f"[Stage6] Updated {len(memory_ids)} memory access "
+                                            f"counters for {ticker} (feedback={feedback:+d})")
+
                         logger.info(f"[Stage6] Reflection stored for {ticker}{pnl_str}")
                     except Exception as e:
                         logger.warning(f"[Stage6] Could not store reflection for {ticker}: {e}")
@@ -579,9 +647,16 @@ class AutonomousTrader:
                     live_positions.get(ticker, {}).get("shares", 0)
                 ))
 
+                # Use confidence from TA output (parsed from decision text)
+                confidence = ta_result.get("confidence", 0.7)
+
+                # Regime-based confidence dampening: CRISIS → reduce by 30%
+                if regime == "CRISIS":
+                    confidence = confidence * 0.7
+
                 decisions[ticker] = {
                     "action": ta_result["signal"],
-                    "confidence": 0.7,
+                    "confidence": confidence,
                     "regime": regime,
                     "price": price or 0,
                     "current_shares": current_shares,

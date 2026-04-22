@@ -251,6 +251,35 @@ class LinearImportanceScoreChange:
         
         return max(self.min_score, min(self.max_score, new_score))
 
+# ─── Objective 2: Simple Sentiment for Importance Features ─────────────────
+
+def _simple_sentiment_for_importance(text: str) -> float:
+    """Ultra-simple word-count sentiment for importance feature extraction.
+
+    Used by MemoryDB.add_memory() to pass real sentiment to the Obj2
+    importance classifier at memory creation time.
+
+    Returns a score in [-1, 1].
+    """
+    positive_words = {
+        "rally", "surge", "profit", "gain", "green", "bull", "up", "higher",
+        "beat", "exceed", "strong", "growth", "positive", "buy", "upgrade",
+        "outperform", "record", "soar", "boom", "rise", "advance",
+    }
+    negative_words = {
+        "crash", "plunge", "loss", "red", "bear", "down", "lower",
+        "miss", "weak", "decline", "negative", "sell", "downgrade",
+        "underperform", "fall", "drop", "slump", "recession", "fear",
+    }
+
+    words = set(text.lower().split())
+    pos = len(words & positive_words)
+    neg = len(words & negative_words)
+    total = pos + neg
+    if total == 0:
+        return 0.0
+    return (pos - neg) / total
+
 
 # ─── Objective 1: Regime-Conditioned Adaptive Decay ────────────────────────
 

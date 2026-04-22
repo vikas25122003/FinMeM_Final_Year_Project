@@ -162,7 +162,20 @@ class MemoryDB:
         ids = []
         for i, t in enumerate(text):
             mem_id = self.id_generator()
-            importance = self.importance_score_init()
+
+            # Obj2 Fix: Pass real text features to importance initialization
+            # so the learned classifier gets meaningful inputs, not defaults
+            text_len = len(t) if isinstance(t, str) else 100
+            try:
+                from finmem.memory.memory_functions import _simple_sentiment_for_importance
+                sent_score = _simple_sentiment_for_importance(t if isinstance(t, str) else "")
+            except (ImportError, AttributeError):
+                sent_score = 0.0
+
+            importance = self.importance_score_init(
+                text_length=text_len,
+                sentiment_score=sent_score,
+            )
             recency = self.recency_score_init()
             compound = self.compound_score_calc.recency_and_importance_score(
                 recency, importance
